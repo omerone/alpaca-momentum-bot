@@ -22,3 +22,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# Claude Code personal settings (machine-specific paths)
+.claude/settings.local.json
