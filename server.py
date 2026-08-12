@@ -201,28 +201,34 @@ def _sessions() -> list[dict]:
     return _calendar_cache["sessions"]
 
 
+NO_EVENT = {"type": None, "ms": None, "at": "", "session_end": ""}
+
+
 def next_market_event() -> dict:
     """When does the market next open (or close, if it is open right now)?
 
     Uses Alpaca's calendar, so weekends, holidays and early closes are right.
+    Never raises: this feeds /api/status, and a broken countdown must not take
+    the whole dashboard down with it.
     """
-    now = datetime.now(pytz.UTC)
-    for s in _sessions():
-        if now < s["open"]:
+    try:
+        now = datetime.now(pytz.UTC)
+        for s in _sessions():
+            if now < s["open"]:
+                kind, when = "open", s["open"]
+            elif now < s["close"]:
+                kind, when = "close", s["close"]
+            else:
+                continue
             return {
-                "type": "open",
-                "ms": int(s["open"].timestamp() * 1000),
-                "at": _when(s["open"])["label"],
+                "type": kind,
+                "ms": int(when.timestamp() * 1000),
+                "at": _when(when)["label"],
                 "session_end": fmt_local(s["close"], "%H:%M"),
             }
-        if now < s["close"]:
-            return {
-                "type": "close",
-                "ms": int(s["close"].timestamp() * 1000),
-                "at": _when(s["close"])["label"],
-                "session_end": fmt_local(s["close"], "%H:%M"),
-            }
-    return {"type": None, "ms": None, "at": "", "session_end": ""}
+    except Exception as e:
+        logging.getLogger("server").warning("Market countdown unavailable: %s", e)
+    return dict(NO_EVENT)
 
 
 def bot_running() -> bool:
@@ -700,6 +706,16 @@ def simulate_endpoint():
         return jsonify({"ok": False, "error": "צריך מניות + טווח תאריכים"}), 400
     if len(symbols) > 8:
         return jsonify({"ok": False, "error": "עד 8 מניות בסימולציה אחת"}), 400
+
+    # Reject unparseable dates here rather than letting pandas raise deep in the
+    # backtest, which surfaced as a 500 with an English stack-trace message.
+    for label, value in (("התחלה", start), ("סיום", end)):
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return jsonify({"ok": False, "error": f"תאריך {label} לא תקין: {value}"}), 400
+    if start > end:
+        return jsonify({"ok": False, "error": "תאריך ההתחלה מאוחר מתאריך הסיום"}), 400
 
     import sys as _sys
     examples_dir = str(ROOT / "examples")

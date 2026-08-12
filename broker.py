@@ -162,7 +162,18 @@ class AlpacaBroker:
             logger.info("Protective stop placed: %s %d sh @ $%.2f", symbol, whole, stop_price)
             return {"id": str(result.id), "symbol": symbol, "qty": whole, "stop_price": round(stop_price, 2)}
         except Exception as e:
-            logger.error("Stop order failed for %s: %s", symbol, e)
+            # A sell stop must sit below the market. Being above it means the
+            # stop was already breached while nothing was watching — the right
+            # answer is to sell, not to park an order, and monitor_stops will
+            # do exactly that at the next tick of regular trading hours.
+            if "stop price must be less than current price" in str(e):
+                logger.warning(
+                    "%s is already below its stop ($%.2f) — no order parked; "
+                    "it will be sold when regular trading resumes",
+                    symbol, stop_price,
+                )
+            else:
+                logger.error("Stop order failed for %s: %s", symbol, e)
             return None
 
     def cancel_order(self, order_id: str) -> bool:
