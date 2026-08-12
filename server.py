@@ -9,6 +9,8 @@ watch account, positions and live log.
 import collections
 import json
 import logging
+import secrets
+import socket
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -67,6 +69,73 @@ logging.getLogger().addHandler(_handler)
 # standalone broker for account info while the bot is off
 _account_broker = AlpacaBroker(config)
 _journal = TradeJournal(config.trade_log_file, account=_account_broker.account_number)
+
+
+# ---- access control -----------------------------------------------------
+#
+# This dashboard can start the bot, stop it, place orders and liquidate.
+# Localhost stays open (that is you, at the machine). Anything arriving over
+# the network — your phone — must carry the token.
+
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _load_or_create_token() -> str:
+    path = Path(config.dashboard_token_file)
+    try:
+        if path.exists():
+            token = path.read_text().strip()
+            if token:
+                return token
+        path.parent.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(16)
+        path.write_text(token)
+        path.chmod(0o600)
+        return token
+    except Exception as e:
+        logging.getLogger("server").warning("Token file unusable (%s) — using a session token", e)
+        return secrets.token_urlsafe(16)
+
+
+ACCESS_TOKEN = _load_or_create_token()
+
+
+def _is_local(remote: str | None) -> bool:
+    return (remote or "") in LOCAL_HOSTS
+
+
+@app.before_request
+def _require_token():
+    if _is_local(request.remote_addr):
+        return None
+    supplied = (
+        request.args.get("token")
+        or request.headers.get("X-Dashboard-Token")
+        or request.cookies.get("dash_token")
+    )
+    if supplied and secrets.compare_digest(supplied, ACCESS_TOKEN):
+        return None
+    return (
+        "<html lang='he' dir='rtl'><meta charset='utf-8'>"
+        "<body style=\"background:#0d1117;color:#e6edf3;font-family:-apple-system,Arial;"
+        "padding:40px;text-align:center\">"
+        "<h2>נדרשת הרשאה</h2>"
+        "<p style='color:#8b949e'>פתח את הדשבורד דרך הקישור המלא עם הטוקן.<br>"
+        "הוא מודפס בטרמינל כשהשרת עולה.</p></body></html>",
+        401,
+    )
+
+
+@app.after_request
+def _remember_token(response):
+    """First visit with ?token=... plants a cookie, so later taps need no URL."""
+    supplied = request.args.get("token")
+    if supplied and secrets.compare_digest(supplied, ACCESS_TOKEN):
+        response.set_cookie(
+            "dash_token", ACCESS_TOKEN,
+            max_age=60 * 60 * 24 * 365, samesite="Lax", httponly=True,
+        )
+    return response
 
 
 def _stops_view() -> dict:
@@ -587,7 +656,32 @@ def _maybe_autostart():
         logging.getLogger("server").warning("Autostart failed: %s", e)
 
 
+def _lan_ip() -> str:
+    """This machine's address on the local network, as the phone sees it."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))          # no packet is sent; just picks the route
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return ""
+
+
 if __name__ == "__main__":
     _maybe_autostart()
-    print("\n  Dashboard:  http://localhost:5050\n")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    port = config.dashboard_port
+    print(f"\n  מהמחשב:  http://localhost:{port}")
+
+    if config.dashboard_host == "0.0.0.0":
+        ip = _lan_ip()
+        if ip:
+            print(f"\n  מהטלפון (אותה רשת Wi-Fi) — פתח את הקישור המלא פעם אחת:")
+            print(f"  http://{ip}:{port}/?token={ACCESS_TOKEN}")
+            print("\n  אחרי הפעם הראשונה הטוקן נשמר בדפדפן ואפשר להיכנס ל-"
+                  f"http://{ip}:{port}")
+        else:
+            print("\n  לא הצלחתי לזהות כתובת ברשת המקומית")
+    print()
+
+    app.run(host=config.dashboard_host, port=port, debug=False)

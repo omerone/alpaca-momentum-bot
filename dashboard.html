@@ -14,6 +14,7 @@
     --green: #2ea043; --red: #da3633; --blue: #2f81f7; --yellow: #d29922;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   /* author rules beat the UA's [hidden] rule, so `display: grid` would keep a
      hidden view on screen — force it closed */
   [hidden] { display: none !important; }
@@ -43,8 +44,13 @@
   .pill.acct  { background: #21262d; color: var(--dim); font-weight: 500; direction: ltr; }
   .pill.acct.live { background: #3a1a1a; color: #f87171; font-weight: 700; }
   .clocks { color: var(--dim); font-size: 13px; }
+  /* must wrap, or four pills push the whole page wider than a phone */
+  .statusbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  /* min-width:0 — grid/flex children default to min-width:auto and refuse to
+     shrink below their content, so a wide table drags the whole page with it */
+  .grid > *, .card, .tblwrap { min-width: 0; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
   .card h2 { font-size: 15px; color: var(--dim); margin-bottom: 14px; font-weight: 600; }
   .full { grid-column: 1 / -1; }
@@ -165,6 +171,29 @@
   .x-btn:hover { border-color: var(--red); color: #f87171; }
   .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
   @media (max-width: 700px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+
+  /* --- phone --- */
+  @media (max-width: 600px) {
+    body { padding: 10px; }
+    header { gap: 8px; }
+    h1 { font-size: 17px; }
+    .brand { width: 24px; height: 24px; }
+    .pill { font-size: 11px; padding: 3px 9px; }
+    .card { padding: 13px; border-radius: 10px; }
+    .stats { gap: 14px; }
+    .stat .v { font-size: 17px; }
+    .stat.big .v { font-size: 19px; }
+    /* tables scroll sideways instead of squeezing every column to mush */
+    table { min-width: 560px; }
+    .card > table, .tblwrap { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #powerBtn { width: 84px; height: 84px; font-size: 13px; }
+    .vtab { padding: 9px 14px; font-size: 13px; }
+    #log { height: 180px; font-size: 11px; }
+    .chip { padding: 5px 10px; font-size: 12px; }
+    .sheet { padding: 14px; max-height: 94vh; }
+    .kpis { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .kpi .v { font-size: 14px; }
+  }
   .kpi { background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .kpi .k { font-size: 11px; color: var(--dim); margin-bottom: 3px; }
   .kpi .v { font-size: 16px; font-weight: 700; }
@@ -191,7 +220,7 @@
 
 <header>
   <h1><svg class="brand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#161b22"/><rect x="1" y="1" width="30" height="30" rx="6" fill="none" stroke="#30363d" stroke-width="1.5"/><path d="M5.5 23.5 12 17 17 21 26.5 9.5" fill="none" stroke="#3fb950" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.5 9.5h7.5v7.5" fill="none" stroke="#3fb950" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>בוט מסחר — לוח בקרה</span></h1>
-  <div style="display:flex;align-items:center;gap:12px">
+  <div class="statusbar">
     <a id="alpacaLink" class="pill iconlink" href="https://app.alpaca.markets/paper/dashboard/overview"
        target="_blank" rel="noopener" title="פתח את דשבורד Alpaca בלשונית חדשה">🦙<span>Alpaca</span></a>
     <span id="acctPill" class="pill acct" title="החשבון שאליו הבוט מחובר">—</span>
@@ -244,10 +273,10 @@
       <div class="stat big"><div class="v num" id="totalPl">—</div><div class="k">רווח/הפסד פתוח</div></div>
     </div>
     <div id="guardBar" class="guard" style="display:none"></div>
-    <table>
+    <div class="tblwrap"><table>
       <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>רווח/הפסד</th><th>Stop</th><th></th></tr></thead>
       <tbody id="posBody"><tr><td colspan="8" style="color:var(--dim)">טוען...</td></tr></tbody>
-    </table>
+    </table></div>
     <div style="color:var(--dim);font-size:12px;margin-top:10px">לחץ על שורה כדי לראות גרף מלא מרגע הכניסה ועד עכשיו</div>
   </div>
 

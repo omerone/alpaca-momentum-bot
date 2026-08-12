@@ -77,6 +77,12 @@ class Config:
     # 5) Trade journal: every closed trade appended to SQLite for real stats.
     trade_log_file: str = "data/trades.db"
 
+    # Dashboard server. host 0.0.0.0 exposes it to the local network (phone);
+    # anything not coming from this machine must present the access token.
+    dashboard_host: str = field(default_factory=lambda: os.getenv("DASHBOARD_HOST", "0.0.0.0"))
+    dashboard_port: int = field(default_factory=lambda: int(os.getenv("DASHBOARD_PORT", "5050")))
+    dashboard_token_file: str = "data/dashboard_token.txt"
+
     # Bot loop
     scan_interval_seconds: int = 3
     monitor_interval_seconds: int = 3
