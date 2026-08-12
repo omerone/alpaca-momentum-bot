@@ -5,3 +5,4 @@ numpy>=1.24.0
 yfinance>=0.2.40
 pyarrow>=15.0.0
 flask>=3.0.0
+segno>=1.6
