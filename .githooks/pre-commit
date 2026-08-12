@@ -1,0 +1,22 @@
+#!/bin/sh
+# Block any commit that would publish credentials.
+# This repo is public — a leaked Alpaca key is a real account, not a test value.
+
+fail() { printf '\n\033[31mCOMMIT BLOCKED:\033[0m %s\n\n' "$1" >&2; exit 1; }
+
+# 1. the env file itself must never be tracked
+if git diff --cached --name-only | grep -qx '.env'; then
+    fail ".env is staged. It holds live API keys — keep it gitignored."
+fi
+
+# 2. key-shaped strings anywhere in the staged content
+#    Alpaca: key id = PK/AK + 18 uppercase alnum, secret = 40 chars base62
+staged=$(git diff --cached -U0)
+if printf '%s' "$staged" | grep -Eq '\b(PK|AK)[A-Z0-9]{16,20}\b'; then
+    fail "an Alpaca API key id appears in the staged changes."
+fi
+if printf '%s' "$staged" | grep -Eq 'ALPACA_SECRET_KEY[[:space:]]*=[[:space:]]*[A-Za-z0-9]{30,}'; then
+    fail "an Alpaca secret key appears in the staged changes."
+fi
+
+exit 0
