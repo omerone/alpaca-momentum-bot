@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%23161b22%22%2F%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%2230%22%20height%3D%2230%22%20rx%3D%226%22%20fill%3D%22none%22%20stroke%3D%22%2330363d%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M5.5%2023.5%2012%2017%2017%2021%2026.5%209.5%22%20fill%3D%22none%22%20stroke%3D%22%233fb950%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Cpath%20d%3D%22M19.5%209.5h7.5v7.5%22%20fill%3D%22none%22%20stroke%3D%22%233fb950%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%23161b22%22%2F%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%2230%22%20height%3D%2230%22%20rx%3D%226%22%20fill%3D%22none%22%20stroke%3D%22%2330363d%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M5.5%2023.5%2012%2017%2017%2021%2026.5%209.5%22%20fill%3D%22none%22%20stroke%3D%22%233fb950%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Cpath%20d%3D%22M19.5%209.5h7.5v7.5%22%20fill%3D%22none%22%20stroke%3D%22%233fb950%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E">
+<meta name="theme-color" content="#0d1117">
 <title>בוט מסחר — לוח בקרה</title>
 <style>
   :root {
@@ -20,7 +23,8 @@
     padding: 20px; max-width: 1100px; margin: 0 auto;
   }
   header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-  h1 { font-size: 22px; }
+  h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; }
+  .brand { width: 30px; height: 30px; flex: none; }
   .pill { padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
   .pill.open  { background: #1a3a24; color: #4ade80; }
   .pill.closed{ background: #3a1a1a; color: #f87171; }
@@ -186,7 +190,7 @@
 <body>
 
 <header>
-  <h1>🤖 בוט מסחר — לוח בקרה</h1>
+  <h1><svg class="brand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#161b22"/><rect x="1" y="1" width="30" height="30" rx="6" fill="none" stroke="#30363d" stroke-width="1.5"/><path d="M5.5 23.5 12 17 17 21 26.5 9.5" fill="none" stroke="#3fb950" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.5 9.5h7.5v7.5" fill="none" stroke="#3fb950" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>בוט מסחר — לוח בקרה</span></h1>
   <div style="display:flex;align-items:center;gap:12px">
     <a id="alpacaLink" class="pill iconlink" href="https://app.alpaca.markets/paper/dashboard/overview"
        target="_blank" rel="noopener" title="פתח את דשבורד Alpaca בלשונית חדשה">🦙<span>Alpaca</span></a>
