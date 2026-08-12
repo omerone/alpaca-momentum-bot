@@ -1,0 +1,24 @@
+# --- secrets: never commit ---
+.env
+.env.*
+!.env.example
+
+# --- runtime state (account-specific, not source) ---
+# price cache, stops.json, trades.db
+data/
+# last selected focus symbols
+focus.json
+# dashboard autostart flag
+autostart.json
+*.log
+
+# --- python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- editors / os ---
+.idea/
+.vscode/
+.DS_Store

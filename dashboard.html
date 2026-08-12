@@ -1,0 +1,1262 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>בוט מסחר — לוח בקרה</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --text: #e6edf3; --dim: #8b949e;
+    --green: #2ea043; --red: #da3633; --blue: #2f81f7; --yellow: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* author rules beat the UA's [hidden] rule, so `display: grid` would keep a
+     hidden view on screen — force it closed */
+  [hidden] { display: none !important; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    padding: 20px; max-width: 1100px; margin: 0 auto;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .pill.open  { background: #1a3a24; color: #4ade80; }
+  .pill.closed{ background: #3a1a1a; color: #f87171; }
+  .pill.ext   { background: #3a2a12; color: #f0c674; }
+  .pill.iconlink {
+    display: inline-flex; align-items: center; gap: 6px; background: #21262d;
+    color: var(--dim); text-decoration: none; border: 1px solid var(--border);
+    transition: border-color .15s, color .15s;
+  }
+  .pill.iconlink:hover { border-color: var(--yellow); color: var(--text); }
+  .pill.iconlink span { font-size: 12px; }
+  @media (max-width: 700px) { .pill.iconlink span { display: none; } }
+  .pill.count { background: #10233d; color: #79b8ff; }
+  .pill.count.soon { background: #3a2a12; color: #f0c674; }
+  .pill.count b { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
+  .pill.acct  { background: #21262d; color: var(--dim); font-weight: 500; direction: ltr; }
+  .pill.acct.live { background: #3a1a1a; color: #f87171; font-weight: 700; }
+  .clocks { color: var(--dim); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card h2 { font-size: 15px; color: var(--dim); margin-bottom: 14px; font-weight: 600; }
+  .full { grid-column: 1 / -1; }
+
+  /* power button */
+  .power-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  #powerBtn {
+    width: 110px; height: 110px; border-radius: 50%; border: 4px solid var(--border);
+    background: #21262d; color: var(--text); font-size: 15px; font-weight: 700;
+    cursor: pointer; transition: all .2s;
+  }
+  #powerBtn.on  { border-color: var(--green); color: #4ade80; box-shadow: 0 0 24px #2ea04355; }
+  #powerBtn.off { border-color: var(--red);   color: #f87171; }
+  #powerBtn:disabled { opacity: .5; cursor: wait; }
+  .power-info { flex: 1; min-width: 200px; }
+  #powerState { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+  .power-info small { color: var(--dim); line-height: 1.6; display: block; }
+
+  /* symbols */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: #21262d; color: var(--dim); font-size: 13px; cursor: pointer; user-select: none;
+  }
+  .chip.sel { background: #12325e; border-color: var(--blue); color: #79b8ff; font-weight: 700; }
+  .sym-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text], input[type=date] {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); padding: 8px 12px; font-size: 14px; width: 130px;
+    color-scheme: dark;
+  }
+  button.small {
+    background: #21262d; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button.small:hover { border-color: var(--blue); }
+  #focusNow { margin-top: 10px; font-size: 13px; color: var(--yellow); }
+
+  /* account + positions */
+  .stats { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat .v { font-size: 20px; font-weight: 700; }
+  .stat .k { font-size: 12px; color: var(--dim); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { color: var(--dim); text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  td { padding: 9px 8px; border-bottom: 1px solid #21262d; }
+  .pos { color: #4ade80; } .neg { color: #f87171; }
+  /* numbers must stay LTR inside the RTL page, otherwise the minus sign jumps around */
+  .num { direction: ltr; unicode-bidi: isolate; text-align: right; font-variant-numeric: tabular-nums; }
+  .pl { display: inline-flex; align-items: center; gap: 7px; direction: ltr; unicode-bidi: isolate; }
+  .pl .amt { font-size: 14px; font-weight: 700; }
+  .pl .pc { font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+  .pos .pc { background: #1a3a24; } .neg .pc { background: #3a1a1a; }
+  tr.up  td:first-child { border-right: 3px solid var(--green); }
+  tr.down td:first-child { border-right: 3px solid var(--red); }
+  .stat.big .v { font-size: 22px; }
+
+  /* protective-stop status */
+  .guard {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px;
+  }
+  .guard.warn { background: #3a2a12; border: 1px solid #7a5a1a; color: #f0c674; }
+  .guard.ok   { background: #12291b; border: 1px solid #1f5132; color: #7ee2a8; }
+  .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.on  { background: #12291b; color: #7ee2a8; }
+  .badge.off { background: #3a1a1a; color: #f87171; }
+  .badge.part { background: #3a2a12; color: #f0c674; }
+  .when { white-space: nowrap; line-height: 1.35; }
+  .when .sub { font-size: 11px; color: var(--dim); }
+
+  /* period tabs on the journal */
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tab {
+    padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: #21262d; color: var(--dim); font-size: 12px; cursor: pointer;
+  }
+  .tab.sel { background: #12325e; border-color: var(--blue); color: #79b8ff; font-weight: 700; }
+
+  /* top-level view tabs */
+  .viewtabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+  .vtab {
+    padding: 10px 20px; font-size: 14px; font-weight: 600; color: var(--dim);
+    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .vtab:hover { color: var(--text); }
+  .vtab.sel { color: #79b8ff; border-bottom-color: var(--blue); }
+
+  .chartbox { position: relative; direction: ltr; min-height: 60px; }
+  .chartbox .empty { color: var(--dim); padding: 34px 0; text-align: center; direction: rtl; font-size: 13px; }
+  .note { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .tblwrap { overflow-x: auto; }
+  .bar-cell { display: flex; align-items: center; gap: 8px; direction: ltr; }
+  .bar-cell .track { flex: 1; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; min-width: 40px; }
+  .bar-cell .fill { height: 100%; border-radius: 3px; }
+
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: #1c2431; }
+  .go { color: var(--dim); font-size: 11px; }
+  tr.clickable:hover .go { color: var(--blue); }
+
+  /* chart modal */
+  #modal {
+    position: fixed; inset: 0; background: #010409cc; backdrop-filter: blur(3px);
+    display: none; align-items: center; justify-content: center; padding: 20px; z-index: 50;
+  }
+  #modal.show { display: flex; }
+  .sheet {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    width: 100%; max-width: 980px; max-height: 92vh; overflow-y: auto; padding: 20px;
+  }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .sheet-head h3 { font-size: 20px; }
+  .sheet-sub { color: var(--dim); font-size: 12px; margin-bottom: 16px; }
+  .x-btn {
+    background: #21262d; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; width: 34px; height: 34px; font-size: 16px; cursor: pointer;
+  }
+  .x-btn:hover { border-color: var(--red); color: #f87171; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  @media (max-width: 700px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: #0d1117; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .kpi .k { font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+  .kpi .v { font-size: 16px; font-weight: 700; }
+  #chartWrap { position: relative; direction: ltr; }
+  #chartWrap .empty { color: var(--dim); padding: 40px 0; text-align: center; direction: rtl; }
+  #tip {
+    position: absolute; pointer-events: none; display: none; z-index: 2; direction: rtl;
+    background: #0d1117ee; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 9px; font-size: 12px; line-height: 1.6; white-space: nowrap;
+  }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-left: 5px; }
+
+  /* log */
+  #log {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    font-family: "SF Mono", Consolas, monospace; font-size: 12px; line-height: 1.7;
+    padding: 12px; height: 260px; overflow-y: auto; direction: ltr; text-align: left;
+    white-space: pre-wrap; color: #9da7b3;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 בוט מסחר — לוח בקרה</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <a id="alpacaLink" class="pill iconlink" href="https://app.alpaca.markets/paper/dashboard/overview"
+       target="_blank" rel="noopener" title="פתח את דשבורד Alpaca בלשונית חדשה">🦙<span>Alpaca</span></a>
+    <span id="acctPill" class="pill acct" title="החשבון שאליו הבוט מחובר">—</span>
+    <span id="marketPill" class="pill closed">בודק שוק...</span>
+    <span id="countdown" class="pill count" title="">—</span>
+    <span class="clocks">שעון ישראל <b id="tIL">--:--</b></span>
+  </div>
+</header>
+
+<nav class="viewtabs" id="viewTabs">
+  <span class="vtab sel" data-v="trade">מסחר</span>
+  <span class="vtab" data-v="perf">ביצועים</span>
+  <span class="vtab" data-v="sim">סימולטור</span>
+</nav>
+
+<div class="grid" id="viewTrade">
+
+  <div class="card">
+    <h2>הפעלה</h2>
+    <div class="power-row">
+      <button id="powerBtn" class="off" onclick="toggleBot()">כבוי</button>
+      <div class="power-info">
+        <div id="powerState">האוטומציה כבויה</div>
+        <small id="powerHint">בחר מניות למיקוד ולחץ על הכפתור כדי להפעיל.
+        כשהאוטומציה פועלת היא קונה רק בחלון <b id="entryWin"></b>, וסוגרת הכל לפני סוף היום.
+        עצירה לא מוכרת פוזיציות קיימות.</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>מניות למיקוד — על מה הבוט יעבוד היום</h2>
+    <div id="chips" class="chips"></div>
+    <div class="sym-actions">
+      <input type="text" id="customSym" placeholder="הוסף סימבול (למשל NBIS)" maxlength="6">
+      <button class="small" onclick="addCustom()">הוסף +</button>
+      <button class="small" onclick="selectAll()">בחר הכל</button>
+      <button class="small" onclick="clearAll()">נקה</button>
+      <button class="small" onclick="applyFocus()" id="applyBtn" style="display:none">עדכן מיקוד (רץ)</button>
+    </div>
+    <div id="focusNow"></div>
+  </div>
+
+  <div class="card full">
+    <h2>חשבון ופוזיציות (Paper — כסף דמה)</h2>
+    <div class="stats">
+      <div class="stat"><div class="v num" id="equity">—</div><div class="k">שווי תיק</div></div>
+      <div class="stat"><div class="v num" id="cash">—</div><div class="k">מזומן</div></div>
+      <div class="stat"><div class="v" id="posCount">—</div><div class="k">פוזיציות פתוחות</div></div>
+      <div class="stat big"><div class="v num" id="totalPl">—</div><div class="k">רווח/הפסד פתוח</div></div>
+    </div>
+    <div id="guardBar" class="guard" style="display:none"></div>
+    <table>
+      <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>רווח/הפסד</th><th>Stop</th><th></th></tr></thead>
+      <tbody id="posBody"><tr><td colspan="8" style="color:var(--dim)">טוען...</td></tr></tbody>
+    </table>
+    <div style="color:var(--dim);font-size:12px;margin-top:10px">לחץ על שורה כדי לראות גרף מלא מרגע הכניסה ועד עכשיו</div>
+  </div>
+
+  <div class="card full">
+    <h2>לוג חי</h2>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<div class="grid" id="viewPerf" hidden>
+
+  <div class="card full">
+    <div class="tabs" id="periodTabs">
+      <span class="tab" data-p="today">היום</span>
+      <span class="tab" data-p="week">7 ימים</span>
+      <span class="tab" data-p="month">30 יום</span>
+      <span class="tab sel" data-p="all">הכל</span>
+    </div>
+    <div class="stats" id="eqStats"><span style="color:var(--dim);font-size:13px">טוען...</span></div>
+    <div class="chartbox" id="eqChart"></div>
+    <div class="note">שווי התיק לאורך זמן — כולל פוזיציות פתוחות, ישירות מ-Alpaca. זה הקו שאומר אם אנחנו מרוויחים.</div>
+  </div>
+
+  <div class="card full">
+    <h2>רווח/הפסד ממומש לפי יום</h2>
+    <div class="chartbox" id="dayChart"></div>
+    <div class="note">רק עסקאות שנסגרו. הקו הלבן הוא הצבירה המצטברת.</div>
+  </div>
+
+  <div class="card">
+    <h2>לפי מניה — מי מרוויח ומי שורף</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>מניה</th><th>עסקאות</th><th>הצלחה</th><th>רווח/הפסד</th></tr></thead>
+      <tbody id="bySymbol"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>לפי שעת כניסה (שעון ישראל)</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>שעה</th><th>עסקאות</th><th>הצלחה</th><th>רווח/הפסד</th></tr></thead>
+      <tbody id="byHour"></tbody>
+    </table></div>
+    <div class="note">איזו שעה במסחר עובדת בשבילנו — הבסיס להזזת חלון הכניסה.</div>
+  </div>
+
+  <div class="card full">
+    <h2>לפי סיבת יציאה</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>סיבה</th><th>עסקאות</th><th>הצלחה</th><th>רווח/הפסד</th></tr></thead>
+      <tbody id="byReason"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card full">
+    <h2>עסקאות סגורות</h2>
+    <div class="stats" id="jStats"><span style="color:var(--dim);font-size:13px">טוען...</span></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>מניה</th><th>כמות</th><th>כניסה</th><th>יציאה</th><th>רווח/הפסד</th><th>Stop התחלתי</th><th>Stop בסגירה</th><th>סיבה</th><th>משך</th><th>נסגר</th></tr></thead>
+      <tbody id="tradeBody"><tr><td colspan="10" style="color:var(--dim)">טוען...</td></tr></tbody>
+    </table></div>
+  </div>
+
+</div>
+
+<div class="grid" id="viewSim" hidden>
+
+  <div class="card full">
+    <h2>סימולטור אסטרטגיות — לונג מול שורט על נתונים היסטוריים אמיתיים</h2>
+    <div id="simChips" class="chips"></div>
+    <div class="sym-actions" style="margin-bottom:12px;align-items:center">
+      <input type="text" id="simCustom" style="width:150px" placeholder="הוסף סימבול" maxlength="6">
+      <button class="small" onclick="simAddCustom()">הוסף +</button>
+      <button class="small" onclick="simCopyFocus()">קח מהמיקוד</button>
+      <button class="small" onclick="simClear()">נקה</button>
+    </div>
+    <div id="simPicked" style="font-size:13px;margin-bottom:12px"></div>
+    <div class="sym-actions" style="margin-bottom:10px;align-items:center">
+      <span style="color:var(--dim);font-size:13px">מתאריך</span>
+      <input type="text" id="simStart" style="width:110px" placeholder="dd/mm/yyyy">
+      <span style="color:var(--dim);font-size:13px">עד</span>
+      <input type="text" id="simEnd" style="width:110px" placeholder="dd/mm/yyyy">
+      <button class="small" onclick="simRange(7)">שבוע</button>
+      <button class="small" onclick="simRange(30)">חודש</button>
+      <button class="small" onclick="simRange(90)">3 חודשים</button>
+      <button class="small" id="simRunBtn" onclick="runSim()">▶ הרץ סימולציה</button>
+    </div>
+    <div class="note">מריץ שלוש גרסאות של האסטרטגיה על נתוני דקה אמיתיים: לונג בלבד (מה שהבוט החי עושה),
+    שורט בלבד (תמונת מראה, עם בלם SSR וחצי סיכון), ומשולב (מאפשר היפוך כיוון באותו יום).
+    עד 8 מניות. ריצה ראשונה על טווח חדש מורידה נתונים — עד דקה. זו סימולציה בלבד — לא נוגעת בחשבון.</div>
+    <div id="simStatus" style="margin-top:10px;color:var(--yellow);font-size:13px"></div>
+  </div>
+
+  <div class="card full" id="simSummaryCard" hidden>
+    <h2>סיכום — איזו גרסה מרוויחה?</h2>
+    <div id="simVerdict" class="guard ok" style="margin-bottom:14px"></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>גרסה</th><th>מה זה בודק</th><th>עסקאות</th><th>הצלחה</th><th>Profit Factor</th><th>סה"כ רווח/הפסד</th></tr></thead>
+      <tbody id="simSummary"></tbody>
+    </table></div>
+    <div class="note">שלוש הגרסאות הן תרחישים נפרדים שרצים על אותם נתונים בדיוק — משווים אותם זה לזה, הם לא מצטברים.
+    Profit Factor = כל הרווחים חלקי כל ההפסדים (מעל 1 = רווחי).</div>
+  </div>
+
+  <div class="card full" id="simChartCard" hidden>
+    <h2>רווח מצטבר לאורך התקופה</h2>
+    <div class="chartbox" id="simChart"></div>
+    <div class="legend">
+      <span><i style="border-color:#2ea043"></i>לונג בלבד</span>
+      <span><i style="border-color:#da3633"></i>שורט בלבד</span>
+      <span><i style="border-color:#2f81f7"></i>משולב</span>
+    </div>
+  </div>
+
+  <div class="card full" id="simTradesCard" hidden>
+    <h2>העסקאות של הסימולציה</h2>
+    <div class="tabs" id="simModeTabs">
+      <span class="tab sel" data-m="LONG">לונג</span>
+      <span class="tab" data-m="SHORT">שורט</span>
+      <span class="tab" data-m="BOTH">משולב</span>
+    </div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>מניה</th><th>כיוון</th><th>כניסה</th><th>יציאה</th><th>מחיר כניסה</th><th>מחיר יציאה</th><th>רווח/הפסד</th><th>סיבה</th></tr></thead>
+      <tbody id="simTrades"></tbody>
+    </table></div>
+  </div>
+
+</div>
+
+<div id="modal" onclick="if(event.target===this)closeChart()">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3 id="cSym">—</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="small" onclick="loadChart(chartSym)">רענן</button>
+        <button class="x-btn" onclick="closeChart()">✕</button>
+      </div>
+    </div>
+    <div class="sheet-sub" id="cSub">טוען...</div>
+    <div class="kpis" id="cKpis"></div>
+    <div id="chartWrap"><div id="tip"></div></div>
+    <div class="legend">
+      <span><i id="legLine" style="border-color:#2f81f7"></i>מחיר</span>
+      <span><i style="border-color:#8b949e;border-top-style:dashed"></i>מחיר כניסה</span>
+      <span><i style="border-color:#da3633;border-top-style:dashed"></i>Stop</span>
+      <span><i style="border-color:#d29922;border-top-style:dashed"></i>רגע הכניסה</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// selection survives page refresh via localStorage
+let selected = new Set(JSON.parse(localStorage.getItem("focusSel") || "null") || []);
+const hadSaved = localStorage.getItem("focusSel") !== null;
+let universe = [];
+let running = false;
+let busy = false;
+
+// money with the sign in front of the $, so RTL never scrambles it
+function fmt(n) {
+  if (n == null) return "—";
+  const v = Number(n);
+  return (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtSigned(n) {
+  if (n == null) return "—";
+  const v = Number(n);
+  return (v < 0 ? "-$" : "+$") + Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function renderChips() {
+  const extras = [...selected].filter(s => !universe.includes(s));
+  const all = [...universe, ...extras];
+  document.getElementById("chips").innerHTML = all.map(s =>
+    `<span class="chip ${selected.has(s) ? "sel" : ""}" onclick="toggleSym('${s}')">${s}</span>`).join("");
+  document.getElementById("focusNow").textContent =
+    selected.size ? `נבחרו ${selected.size}: ${[...selected].join(", ")}` : "לא נבחרו מניות";
+  localStorage.setItem("focusSel", JSON.stringify([...selected]));
+}
+
+function toggleSym(s) { selected.has(s) ? selected.delete(s) : selected.add(s); renderChips(); }
+function selectAll() { universe.forEach(s => selected.add(s)); renderChips(); }
+function clearAll() { selected.clear(); renderChips(); }
+function addCustom() {
+  const inp = document.getElementById("customSym");
+  const s = inp.value.trim().toUpperCase();
+  if (s && /^[A-Z.]{1,6}$/.test(s)) { selected.add(s); inp.value = ""; renderChips(); }
+}
+
+async function toggleBot() {
+  if (busy) return;
+  busy = true;
+  const btn = document.getElementById("powerBtn");
+  btn.disabled = true;
+  try {
+    if (!running) {
+      if (!selected.size) { alert("בחר לפחות מניה אחת למיקוד"); return; }
+      const r = await fetch("/api/start", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({symbols: [...selected]})});
+      const j = await r.json();
+      if (!j.ok) alert("שגיאה: " + (j.error || ""));
+    } else {
+      const r = await fetch("/api/stop", {method: "POST"});
+      const j = await r.json();
+      if (!j.ok) alert("שגיאה: " + (j.error || ""));
+    }
+  } finally {
+    busy = false; btn.disabled = false; refresh();
+  }
+}
+
+async function applyFocus() {
+  if (!selected.size) { alert("בחר לפחות מניה אחת"); return; }
+  await fetch("/api/focus", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({symbols: [...selected]})});
+  refresh();
+}
+
+async function refresh() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    running = s.running;
+    universe = s.universe;
+    if (!hadSaved && !selected.size && s.focus.length) s.focus.forEach(x => selected.add(x));
+    renderChips();
+
+    document.getElementById("tIL").textContent = s.time_il;
+    document.getElementById("entryWin").textContent = s.entry_window;
+
+    // "closed" next to a ticking P/L looks broken — name the actual session
+    const SESSION = {
+      open:   {cls: "open",   txt: "השוק פתוח",   tip: `מסחר רגיל ${s.market_hours_local} שעון ישראל`},
+      pre:    {cls: "ext",    txt: "פרה-מרקט",    tip: "לפני הפתיחה — יש מסחר והמחירים זזים, הבוט לא נוגע"},
+      after:  {cls: "ext",    txt: "אחרי-שעות",   tip: "אחרי הסגירה — יש מסחר והמחירים זזים, הבוט לא נוגע"},
+      closed: {cls: "closed", txt: "השוק סגור",   tip: "אין מסחר — המחירים קפואים עד הפרה-מרקט הבא"},
+    };
+    nextEvent = s.next_event;
+    serverSkew = Date.now() - s.now_ms;   // the browser clock may be off
+    tickCountdown();
+    const sess = SESSION[s.session] || SESSION.closed;
+    const nyNote = `  ·  בניו-יורק כרגע ${s.time_et}`;
+    const pill = document.getElementById("marketPill");
+    pill.className = "pill " + sess.cls;
+    pill.textContent = sess.txt;
+    pill.title = sess.tip + nyNote;
+
+    const btn = document.getElementById("powerBtn");
+    btn.className = running ? "on" : "off";
+    btn.textContent = running ? "פועל" : "כבוי";
+    document.getElementById("powerState").textContent =
+      running ? (s.market_open ? "האוטומציה פועלת וסוחרת" : "האוטומציה פועלת — ממתינה לפתיחת השוק")
+              : "האוטומציה כבויה";
+    document.getElementById("applyBtn").style.display = running ? "" : "none";
+
+    if (s.account) {
+      document.getElementById("equity").textContent = fmt(s.account.equity);
+      document.getElementById("cash").textContent = fmt(s.account.cash);
+      // which account am I actually watching? matters when swapping API keys
+      const acct = document.getElementById("acctPill");
+      acct.className = "pill acct" + (s.account.paper ? "" : " live");
+      acct.textContent = (s.account.paper ? "PAPER " : "⚠ LIVE ") + (s.account.account_number || "—");
+      acct.title = s.account.paper
+        ? "חשבון דמו — כסף לא אמיתי"
+        : "חשבון אמיתי — כסף אמיתי!";
+      const link = document.getElementById("alpacaLink");
+      link.href = s.account.paper
+        ? "https://app.alpaca.markets/paper/dashboard/overview"
+        : "https://app.alpaca.markets/live/dashboard/overview";
+      link.title = `פתח את דשבורד Alpaca (${s.account.paper ? "Paper" : "Live"}) בלשונית חדשה`;
+    }
+    document.getElementById("posCount").textContent = s.positions.length;
+
+    const totalPl = s.positions.reduce((a, p) => a + p.unrealized_pl, 0);
+    const totalCost = s.positions.reduce((a, p) => a + p.entry_price * p.qty, 0);
+    const totalEl = document.getElementById("totalPl");
+    totalEl.className = "v num " + (s.positions.length ? (totalPl >= 0 ? "pos" : "neg") : "");
+    totalEl.textContent = s.positions.length
+      ? `${fmtSigned(totalPl)}  (${pct(totalCost ? totalPl / totalCost * 100 : 0)})`
+      : "—";
+
+    const body = document.getElementById("posBody");
+    body.innerHTML = s.positions.length ? s.positions.map(p => {
+      const win = p.unrealized_pl >= 0;
+      const cls = win ? "pos" : "neg";
+      const arrow = win ? "▲" : "▼";
+      return `<tr class="clickable ${win ? "up" : "down"}" onclick="openChart('${p.symbol}')">
+        <td><b>${p.symbol}</b></td>
+        <td>${whenCell(p.opened, p.held_seconds)}</td>
+        <td class="num">${p.qty.toFixed(2)}</td>
+        <td class="num">${fmt(p.entry_price)}</td>
+        <td class="num">${fmt(p.current_price)}</td>
+        <td class="${cls}"><span class="pl"><span>${arrow}</span><span class="amt">${fmtSigned(p.unrealized_pl)}</span><span class="pc">${pct(p.unrealized_plpc)}</span></span></td>
+        <td class="num">${stopCell(p)}</td>
+        <td class="go">גרף ›</td></tr>`;
+    }).join("") : `<tr><td colspan="8" style="color:var(--dim)">אין פוזיציות פתוחות</td></tr>`;
+
+    renderGuardBar(s);
+    if (view === "sim") renderSimChips();
+
+    const log = document.getElementById("log");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent = s.logs.join("\n");
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  } catch (e) { /* server briefly unavailable */ }
+}
+
+/* ---------- protective stops at the broker ---------- */
+// one merged cell: stop price + shield badge (no duplicated price)
+// "אתמול 13:26" on top, how long we have been holding underneath
+function whenCell(when, heldSeconds) {
+  if (!when || !when.ms) return `<span style="color:var(--dim)">—</span>`;
+  const sub = heldSeconds ? `<div class="sub">${humanDuration(heldSeconds * 1000)}</div>` : "";
+  return `<div class="when" title="${when.full}">${when.label}${sub}</div>`;
+}
+
+function stopCell(p) {
+  const price = p.stop != null ? p.stop : p.broker_stop;
+  if (price == null) return "—";
+  if (!p.protected)
+    return `${fmt(price)} <span class="badge off" title="אין סטופ אצל הברוקר — מוגן רק כשהבוט רץ">חשוף</span>`;
+  // Alpaca refuses stop orders on fractions, so the leftover fraction is uncovered
+  const covered = p.broker_stop_qty || 0;
+  const partial = p.qty - covered > 0.01;
+  return `${fmt(price)} <span class="badge ${partial ? "part" : "on"}" ` +
+         `title="סטופ שמור אצל הברוקר על ${covered} מתוך ${p.qty.toFixed(2)} מניות">` +
+         `🛡${partial ? ` ${covered}/${p.qty.toFixed(2)}` : ""}</span>`;
+}
+
+function renderGuardBar(s) {
+  const bar = document.getElementById("guardBar");
+  if (!s.positions.length || !s.broker_stop_enabled) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  if (s.unprotected > 0) {
+    bar.className = "guard warn";
+    bar.innerHTML = `<span>⚠ ${s.unprotected} פוזיציות ללא סטופ אצל הברוקר — אם המחשב נכבה או הבוט לא רץ, אין הגנה.</span>` +
+      `<button class="small" onclick="protectNow(event)">הגן עכשיו</button>`;
+  } else {
+    bar.className = "guard ok";
+    bar.innerHTML = `<span>🛡 כל הפוזיציות מוגנות בסטופ אמיתי אצל הברוקר (פעיל גם כשהבוט כבוי).</span>` +
+      `<button class="small" onclick="protectNow(event)">רענן הגנה</button>`;
+  }
+}
+
+async function protectNow(ev) {
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = "שולח...";
+  try {
+    const r = await (await fetch("/api/protect", {method: "POST"})).json();
+    if (!r.ok) alert("שגיאה: " + (r.error || ""));
+    else if (r.skipped && r.skipped.length)
+      alert(`הוצבו ${r.placed} סטופים.\nלא ניתן להגן על: ${r.skipped.join(", ")} (פחות ממניה שלמה).`);
+  } catch (e) { alert("השרת לא זמין"); }
+  finally { btn.disabled = false; refresh(); }
+}
+
+/* ---------- market countdown ---------- */
+let nextEvent = null, serverSkew = 0;
+
+function hebDays(n) { return n === 1 ? "יום" : n === 2 ? "יומיים" : `${n} ימים`; }
+
+function countdownText(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(total / 86400), h = Math.floor(total % 86400 / 3600);
+  const m = Math.floor(total % 3600 / 60), sec = total % 60;
+  const pad = n => String(n).padStart(2, "0");
+  if (d) return `${hebDays(d)} ${h} שע'`;
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+function tickCountdown() {
+  const el = document.getElementById("countdown");
+  if (!nextEvent || !nextEvent.ms) { el.textContent = "—"; el.title = "לוח המסחר לא זמין"; return; }
+  const left = nextEvent.ms - (Date.now() - serverSkew);
+  const opening = nextEvent.type === "open";
+  el.className = "pill count" + (left < 30 * 60 * 1000 ? " soon" : "");
+  el.innerHTML = (opening ? "השוק נפתח בעוד " : "השוק נסגר בעוד ") + `<b>${countdownText(left)}</b>`;
+  el.title = (opening ? "פתיחה: " : "סגירה: ") + nextEvent.at +
+             (nextEvent.session_end ? `  ·  המסחר היום עד ${nextEvent.session_end}` : "");
+  if (left <= 0) refresh();       // rolled over — ask the server for the next one
+}
+
+/* ---------- view tabs ---------- */
+let view = "trade";
+document.getElementById("viewTabs").addEventListener("click", e => {
+  const tab = e.target.closest(".vtab");
+  if (!tab) return;
+  view = tab.dataset.v;
+  document.querySelectorAll("#viewTabs .vtab").forEach(t => t.classList.toggle("sel", t === tab));
+  document.getElementById("viewTrade").hidden = view !== "trade";
+  document.getElementById("viewPerf").hidden = view !== "perf";
+  document.getElementById("viewSim").hidden = view !== "sim";
+  if (view === "perf") loadPerformance();
+  if (view === "sim") simDefaults();
+});
+
+/* ---------- simulator ---------- */
+let simData = null, simMode = "LONG";
+
+// dates shown to the user are ALWAYS dd/mm/yyyy; the API speaks yyyy-mm-dd
+function toDMY(d) {
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+function dmyToISO(s) {
+  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  if (+mm < 1 || +mm > 12 || +dd < 1 || +dd > 31) return null;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+function isoToDMY(s) { const [y, m, d] = s.split("-"); return `${d}/${m}/${y}`; }
+
+const SIM_MAX = 8;                 // the backtest endpoint refuses more
+let simSelected = new Set();
+
+function renderSimChips() {
+  const extras = [...simSelected].filter(x => !universe.includes(x));
+  const all = [...universe, ...extras];
+  const full = simSelected.size >= SIM_MAX;
+  document.getElementById("simChips").innerHTML = all.map(x => {
+    const on = simSelected.has(x);
+    // at the cap, unpicked chips are dimmed instead of silently doing nothing
+    return `<span class="chip ${on ? "sel" : ""}" style="${!on && full ? "opacity:.35" : ""}"
+      onclick="simToggle('${x}')">${x}</span>`;
+  }).join("");
+  const picked = document.getElementById("simPicked");
+  picked.style.color = simSelected.size ? "var(--yellow)" : "var(--dim)";
+  picked.textContent = simSelected.size
+    ? `נבחרו ${simSelected.size}/${SIM_MAX}: ${[...simSelected].join(", ")}`
+    : `לא נבחרו מניות — לחץ על סימבול למעלה (עד ${SIM_MAX})`;
+}
+
+function simToggle(x) {
+  if (simSelected.has(x)) simSelected.delete(x);
+  else if (simSelected.size >= SIM_MAX) {
+    document.getElementById("simStatus").textContent = `אפשר עד ${SIM_MAX} מניות בסימולציה — הסר אחת קודם`;
+    return;
+  } else simSelected.add(x);
+  document.getElementById("simStatus").textContent = "";
+  renderSimChips();
+}
+
+function simAddCustom() {
+  const inp = document.getElementById("simCustom");
+  const x = inp.value.trim().toUpperCase();
+  if (x && /^[A-Z.]{1,6}$/.test(x)) { inp.value = ""; simToggle(x); }
+}
+
+function simCopyFocus() {
+  simSelected = new Set([...selected].slice(0, SIM_MAX));
+  renderSimChips();
+}
+
+function simClear() { simSelected.clear(); renderSimChips(); }
+
+function simRange(days) {
+  document.getElementById("simStart").value = toDMY(new Date(Date.now() - (days + 1) * 86400000));
+  document.getElementById("simEnd").value = toDMY(new Date(Date.now() - 86400000));
+}
+
+function simDefaults() {
+  if (!simSelected.size) simSelected = new Set([...selected].slice(0, SIM_MAX));
+  if (!simSelected.size) simSelected = new Set(["NVDA", "TSLA"]);
+  if (!document.getElementById("simStart").value) simRange(30);
+  renderSimChips();
+}
+
+async function runSim() {
+  const syms = [...simSelected];
+  const start = dmyToISO(document.getElementById("simStart").value);
+  const end = dmyToISO(document.getElementById("simEnd").value);
+  const st = document.getElementById("simStatus");
+  if (!syms.length) { st.textContent = "צריך לבחור לפחות מניה אחת"; return; }
+  if (!start || !end) { st.textContent = "תאריך לא תקין — הפורמט הוא dd/mm/yyyy (למשל 13/07/2026)"; return; }
+  const btn = document.getElementById("simRunBtn");
+  btn.disabled = true;
+  st.textContent = "⏳ מריץ סימולציה... ריצה ראשונה על טווח חדש מורידה נתונים ויכולה לקחת עד דקה";
+  try {
+    const r = await fetch("/api/simulate", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({symbols: syms, start, end})});
+    const j = await r.json();
+    if (!j.ok) { st.textContent = "שגיאה: " + (j.error || "לא ידועה"); return; }
+    simData = j;
+    st.textContent = "";
+    renderSim();
+  } catch (e) {
+    st.textContent = "שגיאה: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+const SIM_NAMES = {LONG: "לונג בלבד", SHORT: "שורט בלבד", BOTH: "משולב"};
+const SIM_DESC = {
+  LONG: "מה שהבוט החי עושה באמת — קניות על מומנטום חיובי בלבד",
+  SHORT: "תרחיש היפותטי: רק שורטים — מרוויח כשמניה יורדת (תמונת מראה)",
+  BOTH: "תרחיש היפותטי: גם לונגים וגם שורטים, כולל היפוך כיוון באותו יום",
+};
+
+function renderSim() {
+  const m = simData.modes;
+  ["simSummaryCard", "simChartCard", "simTradesCard"].forEach(id =>
+    document.getElementById(id).hidden = false);
+
+  const order = ["LONG", "SHORT", "BOTH"];
+  const best = order.reduce((a, b) => m[b].total > m[a].total ? b : a, "LONG");
+
+  document.getElementById("simSummary").innerHTML = order.map(k => {
+    const v = m[k];
+    const cls = v.total >= 0 ? "pos" : "neg";
+    const star = k === best ? " ⭐" : "";
+    return `<tr${k === best ? ' style="background:#12291b33"' : ""}>
+      <td><b>${SIM_NAMES[k]}${star}</b></td>
+      <td style="color:var(--dim);font-size:12px">${SIM_DESC[k]}</td>
+      <td>${v.trades}</td><td>${v.win_pct}%</td><td>${v.pf ?? "—"}</td>
+      <td class="${cls}"><b>${fmtSigned(v.total)}</b></td></tr>`;
+  }).join("");
+
+  // plain-Hebrew verdict: what won, and what adding shorts would have done
+  const diff = m.BOTH.total - m.LONG.total;
+  const v = document.getElementById("simVerdict");
+  const period = `${isoToDMY(simData.start)} עד ${isoToDMY(simData.end)}`;
+  let text = `<b>המסקנה לתקופה ${period}:</b> הגרסה הטובה ביותר היא <b>${SIM_NAMES[best]}</b> (${fmtSigned(m[best].total)}). `;
+  text += diff < 0
+    ? `הוספת שורטים ללונגים הייתה <b>גורעת ${fmtSigned(diff)}</b> — בתקופה הזו השורטים מזיקים.`
+    : `הוספת שורטים ללונגים הייתה <b>מוסיפה ${fmtSigned(diff)}</b> — בתקופה הזו השורטים תורמים.`;
+  v.className = "guard " + (diff < 0 ? "warn" : "ok");
+  v.innerHTML = `<span>${text}</span>`;
+
+  drawSimCum(document.getElementById("simChart"), m);
+  renderSimTrades();
+}
+
+function renderSimTrades() {
+  if (!simData) return;
+  const list = simData.modes[simMode].trade_list;
+  document.getElementById("simTrades").innerHTML = list.length ? list.map(t => {
+    const cls = t.pl >= 0 ? "pos" : "neg";
+    const side = t.side === "long" ? "לונג ▲" : "שורט ▼";
+    return `<tr><td><b>${t.sym}</b></td><td>${side}</td><td class="num">${t.t_in}</td><td class="num">${t.t_out}</td>
+      <td class="num">${fmt(t.entry)}</td><td class="num">${fmt(t.exit)}</td>
+      <td class="${cls}">${fmtSigned(t.pl)}</td><td>${t.reason}</td></tr>`;
+  }).join("") : `<tr><td colspan="8" style="color:var(--dim)">אין עסקאות במצב הזה</td></tr>`;
+}
+
+document.getElementById("simModeTabs").addEventListener("click", e => {
+  const tab = e.target.closest(".tab");
+  if (!tab) return;
+  simMode = tab.dataset.m;
+  document.querySelectorAll("#simModeTabs .tab").forEach(t => t.classList.toggle("sel", t === tab));
+  renderSimTrades();
+});
+
+function drawSimCum(el, modes) {
+  const days = [...new Set([].concat(...Object.values(modes).map(m => m.daily.map(d => d.day))))].sort();
+  if (!days.length) { drawEmpty(el, "אין עסקאות בטווח הזה"); return; }
+  const f = chartFrame(el, 260);
+  const plotH = f.H - f.padT - f.axisH, plotW = f.W - f.padL - f.padR;
+  const y1 = f.padT + plotH;
+  const series = {};
+  let mn = 0, mx = 0;
+  for (const [k, m] of Object.entries(modes)) {
+    const map = Object.fromEntries(m.daily.map(d => [d.day, d.cum]));
+    let last = 0;
+    series[k] = days.map(d => (last = map[d] ?? last));
+    mn = Math.min(mn, ...series[k]); mx = Math.max(mx, ...series[k]);
+  }
+  const pad = (mx - mn) * 0.1 || 1; mn -= pad; mx += pad;
+  const X = i => f.padL + (days.length === 1 ? plotW / 2 : (i / (days.length - 1)) * plotW);
+  const Y = v => y1 - ((v - mn) / (mx - mn)) * plotH;
+  const cols = {LONG: "#2ea043", SHORT: "#da3633", BOTH: "#2f81f7"};
+  const s = [`<svg width="${f.W}" height="${f.H}" style="display:block">`];
+  for (let g = 0; g <= 4; g++) {
+    const v = mn + (g / 4) * (mx - mn), y = Y(v);
+    s.push(`<line x1="${f.padL}" x2="${f.padL + plotW}" y1="${y}" y2="${y}" stroke="#21262d"/>`);
+    s.push(`<text x="${f.padL + plotW + 6}" y="${y + 4}" fill="#8b949e" font-size="11">${v < 0 ? "-" : "+"}$${Math.abs(v).toFixed(0)}</text>`);
+  }
+  s.push(`<line x1="${f.padL}" x2="${f.padL + plotW}" y1="${Y(0)}" y2="${Y(0)}" stroke="#8b949e" stroke-dasharray="3 3"/>`);
+  for (const [k, vals] of Object.entries(series)) {
+    const path = vals.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+    s.push(`<path d="${path}" fill="none" stroke="${cols[k]}" stroke-width="2.5"/>`);
+  }
+  [0, Math.floor(days.length / 2), days.length - 1].forEach(i => {
+    const [y_, mo, d] = days[i].split("-");
+    s.push(`<text x="${X(i)}" y="${f.H - 6}" fill="#8b949e" font-size="11" text-anchor="middle">${d}/${mo}</text>`);
+  });
+  s.push("</svg>");
+  el.innerHTML = s.join("");
+}
+
+/* ---------- generic mini charts (same SVG approach as the position chart) ---------- */
+function chartFrame(el, H) {
+  const W = Math.max(300, el.clientWidth || 800);
+  return {W, H, padT: 14, padR: 62, padL: 10, axisH: 22};
+}
+
+function drawEmpty(el, msg) { el.innerHTML = `<div class="empty">${msg}</div>`; }
+
+// equity over time
+function drawEquity(el, points) {
+  if (!points || points.length < 2) { drawEmpty(el, "אין מספיק נקודות בטווח הזה"); return; }
+  const f = chartFrame(el, 260);
+  const plotH = f.H - f.padT - f.axisH, plotW = f.W - f.padL - f.padR;
+  const y1 = f.padT + plotH, n = points.length;
+  let mn = Math.min(...points.map(p => p.equity)), mx = Math.max(...points.map(p => p.equity));
+  const pad = (mx - mn) * 0.1 || Math.max(1, mx * 0.001);
+  mn -= pad; mx += pad;
+  const X = i => f.padL + (i / (n - 1)) * plotW;
+  const Y = v => y1 - ((v - mn) / (mx - mn)) * plotH;
+
+  const first = points[0].equity, last = points[n - 1].equity;
+  const col = last >= first ? "#2ea043" : "#da3633";
+  const s = [`<svg width="${f.W}" height="${f.H}" style="display:block">`];
+  s.push(`<defs><linearGradient id="eqGrad" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0%" stop-color="${col}" stop-opacity="0.3"/>
+    <stop offset="100%" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`);
+  for (let g = 0; g <= 4; g++) {
+    const v = mn + (mx - mn) * g / 4, y = Y(v);
+    s.push(`<line x1="${f.padL}" y1="${y.toFixed(1)}" x2="${f.padL + plotW}" y2="${y.toFixed(1)}" stroke="#21262d"/>`);
+    s.push(`<text x="${f.padL + plotW + 6}" y="${(y + 4).toFixed(1)}" fill="#8b949e" font-size="11">${Math.round(v).toLocaleString("en-US")}</text>`);
+  }
+  // starting equity: everything above this line is profit
+  if (first >= mn && first <= mx) {
+    s.push(`<line x1="${f.padL}" y1="${Y(first).toFixed(1)}" x2="${f.padL + plotW}" y2="${Y(first).toFixed(1)}" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+  }
+  const pts = points.map((p, i) => `${X(i).toFixed(1)},${Y(p.equity).toFixed(1)}`);
+  s.push(`<path d="M${pts[0]} L${pts.slice(1).join(" L")} L${X(n - 1).toFixed(1)},${y1} L${f.padL},${y1} Z" fill="url(#eqGrad)"/>`);
+  s.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`);
+  s.push(`<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(last).toFixed(1)}" r="4" fill="${col}"/>`);
+  const ticks = Math.min(6, n);
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round(t * (n - 1) / Math.max(1, ticks - 1));
+    const d = new Date(points[i].ms);
+    const anchor = t === 0 ? "start" : (t === ticks - 1 ? "end" : "middle");
+    s.push(`<text x="${X(i).toFixed(1)}" y="${f.H - 5}" fill="#8b949e" font-size="11" text-anchor="${anchor}">${d.toLocaleDateString("he-IL", {day: "2-digit", month: "2-digit", timeZone: "Asia/Jerusalem"})}</text>`);
+  }
+  s.push(`</svg>`);
+  el.innerHTML = s.join("");
+}
+
+// realized P/L per day + cumulative line
+function drawDaily(el, days) {
+  if (!days || !days.length) { drawEmpty(el, "אין עסקאות סגורות בטווח הזה"); return; }
+  const f = chartFrame(el, 240);
+  const plotH = f.H - f.padT - f.axisH, plotW = f.W - f.padL - f.padR;
+  const n = days.length;
+  let cum = 0;
+  const cums = days.map(d => (cum += d.pnl));
+  const span = Math.max(...days.map(d => Math.abs(d.pnl)), ...cums.map(Math.abs), 1) * 1.15;
+  const zero = f.padT + plotH / 2;
+  const Y = v => zero - (v / span) * (plotH / 2);
+  const slot = plotW / n;
+  const X = i => f.padL + slot * (i + 0.5);
+  const bw = Math.max(2, slot * 0.6);
+
+  const s = [`<svg width="${f.W}" height="${f.H}" style="display:block">`];
+  s.push(`<line x1="${f.padL}" y1="${zero}" x2="${f.padL + plotW}" y2="${zero}" stroke="#484f58"/>`);
+  [span, span / 2, -span / 2, -span].forEach(v => {
+    s.push(`<text x="${f.padL + plotW + 6}" y="${(Y(v) + 4).toFixed(1)}" fill="#8b949e" font-size="11">${v >= 0 ? "+" : "-"}$${Math.abs(Math.round(v))}</text>`);
+  });
+  days.forEach((d, i) => {
+    const up = d.pnl >= 0, y = Y(d.pnl);
+    s.push(`<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${Math.min(y, zero).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, Math.abs(y - zero)).toFixed(1)}" fill="${up ? "#2ea043" : "#da3633"}" rx="2"><title>${d.key}: ${up ? "+" : "-"}$${Math.abs(d.pnl).toFixed(2)} · ${d.trades} עסקאות</title></rect>`);
+  });
+  const cpts = cums.map((c, i) => `${X(i).toFixed(1)},${Y(c).toFixed(1)}`);
+  s.push(`<polyline points="${cpts.join(" ")}" fill="none" stroke="#e6edf3" stroke-width="2" stroke-dasharray="4 3"/>`);
+  const ticks = Math.min(6, n);
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round(t * (n - 1) / Math.max(1, ticks - 1));
+    const [, m, dd] = days[i].key.split("-");
+    const anchor = t === 0 ? "start" : (t === ticks - 1 ? "end" : "middle");
+    s.push(`<text x="${X(i).toFixed(1)}" y="${f.H - 5}" fill="#8b949e" font-size="11" text-anchor="${anchor}">${dd}/${m}</text>`);
+  }
+  s.push(`</svg>`);
+  el.innerHTML = s.join("");
+}
+
+// shared renderer for the by-symbol / by-hour / by-reason tables
+function breakdownRows(tbodyId, rows, labelFn) {
+  const el = document.getElementById(tbodyId);
+  if (!rows || !rows.length) {
+    el.innerHTML = `<tr><td colspan="4" style="color:var(--dim)">אין נתונים ${PERIOD_NAME[period]}</td></tr>`;
+    return;
+  }
+  const max = Math.max(...rows.map(r => Math.abs(r.pnl)), 1);
+  el.innerHTML = rows.map(r => {
+    const win = r.pnl >= 0;
+    return `<tr class="${win ? "up" : "down"}">
+      <td><b>${labelFn(r.key)}</b></td>
+      <td class="num">${r.trades}</td>
+      <td class="num ${r.win_rate >= 50 ? "pos" : "neg"}">${r.win_rate.toFixed(0)}%</td>
+      <td class="${win ? "pos" : "neg"}">
+        <div class="bar-cell">
+          <span class="amt" style="font-weight:700;min-width:74px">${fmtSigned(r.pnl)}</span>
+          <span class="track"><span class="fill" style="width:${(Math.abs(r.pnl) / max * 100).toFixed(0)}%;background:${win ? "#2ea043" : "#da3633"}"></span></span>
+        </div></td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadPerformance() {
+  try {
+    const p = await (await fetch("/api/performance?period=" + period)).json();
+    const e = p.equity_summary;
+
+    document.getElementById("eqStats").innerHTML = e ? [
+      `<div class="stat big"><div class="v num ${e.change >= 0 ? "pos" : "neg"}">${fmtSigned(e.change)}</div><div class="k">שינוי בתיק (${pct(e.change_pct)})</div></div>`,
+      `<div class="stat"><div class="v num">${fmt(e.now)}</div><div class="k">שווי עכשיו</div></div>`,
+      `<div class="stat"><div class="v num">${fmt(e.start)}</div><div class="k">בתחילת התקופה · ${e.from.label}</div></div>`,
+      `<div class="stat"><div class="v num">${fmt(e.peak)}</div><div class="k">שיא</div></div>`,
+      `<div class="stat"><div class="v num neg">${e.max_drawdown_pct.toFixed(2)}%</div><div class="k">ירידה מקסימלית מהשיא</div></div>`,
+    ].join("") : `<span style="color:var(--dim);font-size:13px">אין נתוני שווי תיק לתקופה הזו</span>`;
+
+    drawEquity(document.getElementById("eqChart"), p.equity);
+    drawDaily(document.getElementById("dayChart"), p.breakdown.by_day);
+    breakdownRows("bySymbol", p.breakdown.by_symbol, k => k);
+    breakdownRows("byHour", p.breakdown.by_hour, k => `${String(k).padStart(2, "0")}:00`);
+    breakdownRows("byReason", p.breakdown.by_reason, k => k);
+  } catch (err) { /* server briefly unavailable */ }
+}
+
+/* ---------- closed-trade journal ---------- */
+let period = "all";
+const PERIOD_NAME = {today: "היום", week: "ב-7 הימים האחרונים", month: "ב-30 הימים האחרונים", all: "מאז ומעולם"};
+
+document.addEventListener("click", e => {
+  const tab = e.target.closest("#periodTabs .tab");
+  if (!tab) return;
+  period = tab.dataset.p;
+  document.querySelectorAll("#periodTabs .tab").forEach(t => t.classList.toggle("sel", t === tab));
+  loadTrades();
+  loadPerformance();
+});
+
+async function loadTrades() {
+  try {
+    const j = await (await fetch("/api/trades?period=" + period)).json();
+    const st = j.stats;
+    const pfTxt = st.profit_factor === null || !isFinite(st.profit_factor)
+      ? (st.trades ? "∞" : "—") : st.profit_factor.toFixed(2);
+
+    document.getElementById("jStats").innerHTML = st.trades ? [
+      `<div class="stat"><div class="v num">${st.trades}</div><div class="k">עסקאות</div></div>`,
+      `<div class="stat"><div class="v num ${st.win_rate >= 50 ? "pos" : "neg"}">${st.win_rate.toFixed(0)}%</div><div class="k">אחוז הצלחה (${st.wins}/${st.trades})</div></div>`,
+      `<div class="stat big"><div class="v num ${st.total_pnl >= 0 ? "pos" : "neg"}">${fmtSigned(st.total_pnl)}</div><div class="k">רווח/הפסד ממומש</div></div>`,
+      `<div class="stat"><div class="v num ${st.expectancy >= 0 ? "pos" : "neg"}">${fmtSigned(st.expectancy)}</div><div class="k">תוחלת לעסקה</div></div>`,
+      `<div class="stat"><div class="v num">${pfTxt}</div><div class="k">Profit Factor</div></div>`,
+      `<div class="stat"><div class="v num pos">${fmtSigned(st.avg_win)}</div><div class="k">רווח ממוצע</div></div>`,
+      `<div class="stat"><div class="v num neg">${fmtSigned(st.avg_loss)}</div><div class="k">הפסד ממוצע</div></div>`,
+      `<div class="stat"><div class="v num">${st.avg_hold_min.toFixed(0)} דק'</div><div class="k">משך ממוצע</div></div>`,
+    ].join("") : `<span style="color:var(--dim);font-size:13px">אין עסקאות סגורות ${PERIOD_NAME[period]} — הטבלה תתמלא אחרי הסגירה הראשונה.</span>`;
+
+    const rows = j.trades || [];
+    document.getElementById("tradeBody").innerHTML = rows.length ? rows.map(t => {
+      const win = t.pnl_usd >= 0, cls = win ? "pos" : "neg";
+      const held = t.held_seconds ? humanDuration(t.held_seconds * 1000) : "—";
+      return `<tr class="${win ? "up" : "down"}">
+        <td><b>${t.symbol}</b></td>
+        <td class="num">${t.qty.toFixed(2)}</td>
+        <td class="num">${fmt(t.entry_price)}</td>
+        <td class="num">${fmt(t.exit_price)}</td>
+        <td class="${cls}"><span class="pl"><span>${win ? "▲" : "▼"}</span><span class="amt">${fmtSigned(t.pnl_usd)}</span><span class="pc">${pct(t.pnl_pct)}</span></span></td>
+        <td class="num" style="color:var(--dim)">${t.initial_stop != null ? fmt(t.initial_stop) : "—"}</td>
+        <td class="num">${t.stop_price != null ? fmt(t.stop_price) : "—"}</td>
+        <td style="color:var(--dim)">${t.reason || "—"}</td>
+        <td class="num">${held}</td>
+        <td>${whenCell(t.closed, null)}</td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="10" style="color:var(--dim)">אין עסקאות סגורות ${PERIOD_NAME[period]}</td></tr>`;
+  } catch (e) { /* server briefly unavailable */ }
+}
+
+/* ---------- position chart ---------- */
+let chartSym = null, chartData = null, chartTimer = null;
+
+function openChart(sym) {
+  chartSym = sym;
+  chartData = null;
+  document.getElementById("cSym").textContent = sym;
+  document.getElementById("cSub").textContent = "טוען נתונים...";
+  document.getElementById("cKpis").innerHTML = "";
+  document.getElementById("chartWrap").innerHTML = '<div id="tip"></div><div class="empty">טוען...</div>';
+  document.getElementById("modal").classList.add("show");
+  loadChart(sym);
+  clearInterval(chartTimer);
+  chartTimer = setInterval(() => loadChart(chartSym), 20000);
+}
+
+function closeChart() {
+  document.getElementById("modal").classList.remove("show");
+  clearInterval(chartTimer);
+  chartTimer = null; chartSym = null; chartData = null;
+}
+
+function chartError(msg) {
+  document.getElementById("cSub").textContent = msg;
+  document.getElementById("chartWrap").innerHTML = `<div id="tip"></div><div class="empty">${msg}</div>`;
+}
+
+async function loadChart(sym) {
+  if (!sym) return;
+  try {
+    const d = await (await fetch("/api/history/" + encodeURIComponent(sym))).json();
+    if (!d.ok) { chartError(d.error || "שגיאה בטעינת הנתונים"); return; }
+    chartData = d;
+    renderChart();
+  } catch (e) { chartError("השרת לא זמין כרגע"); }
+}
+
+function humanDuration(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  const days = Math.floor(m / 1440), hrs = Math.floor((m % 1440) / 60), mins = m % 60;
+  if (days) return `${hebDays(days)} ${hrs} שע'`;
+  if (hrs) return `${hrs} שע' ${mins} דק'`;
+  return `${mins} דק'`;
+}
+
+function pct(v) { return (v >= 0 ? "+" : "") + v.toFixed(2) + "%"; }
+function kpi(k, v, cls) { return `<div class="kpi"><div class="k">${k}</div><div class="v num ${cls || ""}">${v}</div></div>`; }
+
+function renderChart() {
+  const d = chartData;
+  if (!d) return;
+  const bars = d.bars || [];
+  const entry = d.entry_price;
+  const wrap = document.getElementById("chartWrap");
+
+  // --- stats since entry ---
+  let sinceIdx = d.entry_ms ? bars.findIndex(b => b.ms >= d.entry_ms) : 0;
+  if (sinceIdx < 0) sinceIdx = 0;
+  const held = bars.slice(sinceIdx);
+  const hi = held.reduce((a, b) => Math.max(a, b.h), entry);
+  const lo = held.reduce((a, b) => Math.min(a, b.l), entry);
+  let peak = entry, dd = 0;
+  held.forEach(b => { peak = Math.max(peak, b.h); dd = Math.min(dd, (b.l - peak) / peak * 100); });
+  const plCls = d.unrealized_pl >= 0 ? "pos" : "neg";
+  const heldMs = d.entry_ms ? Date.now() - d.entry_ms : null;
+
+  const when = d.opened && d.opened.ms
+    ? `<b>${d.opened.label}</b> (${d.opened.full})` : `<b>${d.entry_label}</b>`;
+  document.getElementById("cSub").innerHTML =
+    `נכנסנו ${when}${d.entry_exact ? "" : " — משוער"}` +
+    `${heldMs != null ? ` · מחזיקים ${humanDuration(heldMs)}` : ""} · ${d.qty.toFixed(2)} מניות · ` +
+    `נרות של ${d.interval} · ${bars.length} נקודות · מקור: IEX`;
+
+  document.getElementById("cKpis").innerHTML =
+    kpi("מחיר כניסה", fmt(entry)) +
+    kpi("מחיר עכשיו", fmt(d.current_price)) +
+    kpi("רווח/הפסד", `${d.unrealized_pl >= 0 ? "▲" : "▼"} ${fmtSigned(d.unrealized_pl)} (${pct(d.unrealized_plpc)})`, plCls) +
+    kpi("Stop נוכחי", (d.stop != null || d.broker_stop != null)
+        ? `${fmt(d.stop != null ? d.stop : d.broker_stop)} (${pct(((d.stop != null ? d.stop : d.broker_stop) - entry) / entry * 100)})` +
+          (d.broker_stop != null ? ` 🛡 ${d.broker_stop_qty}/${d.qty.toFixed(2)}` : " · חשוף")
+        : "לא הוגדר") +
+    kpi("שיא מאז הכניסה", `${fmt(hi)} (${pct((hi - entry) / entry * 100)})`) +
+    kpi("שפל מאז הכניסה", `${fmt(lo)} (${pct((lo - entry) / entry * 100)})`) +
+    kpi("ירידה מהשיא", pct(dd), dd < 0 ? "neg" : "") +
+    kpi("משך החזקה", heldMs != null ? humanDuration(heldMs) : "—");
+
+  if (bars.length < 2) {
+    wrap.innerHTML = '<div id="tip"></div><div class="empty">אין מספיק נרות בטווח הזה (IEX מדווח רק חלק מהמסחר)</div>';
+    return;
+  }
+
+  // --- geometry ---
+  const W = Math.max(320, wrap.clientWidth || 900);
+  const H = 380, padT = 14, padR = 60, padL = 10, axisH = 22, volH = 50;
+  const plotH = H - padT - axisH - volH;
+  const plotW = W - padL - padR;
+  const y0 = padT, y1 = padT + plotH;
+  const volTop = y1 + 14, volBot = y1 + volH;
+  const n = bars.length;
+
+  let mn = bars.reduce((a, b) => Math.min(a, b.l), Infinity);
+  let mx = bars.reduce((a, b) => Math.max(a, b.h), -Infinity);
+  [entry, d.stop].forEach(v => { if (v != null) { mn = Math.min(mn, v); mx = Math.max(mx, v); } });
+  const span = (mx - mn) || Math.max(0.02, mx * 0.002);
+  mn -= span * 0.08; mx += span * 0.08;
+
+  const X = i => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const Y = p => y1 - ((p - mn) / (mx - mn)) * plotH;
+
+  const up = d.current_price >= entry;
+  const col = up ? "#2ea043" : "#da3633";
+  const svg = [];
+  svg.push(`<svg id="chartSvg" width="${W}" height="${H}" style="display:block">`);
+  svg.push(`<defs><linearGradient id="areaGrad" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="${col}" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`);
+
+  // price grid + labels (right side, like a trading terminal)
+  for (let g = 0; g <= 4; g++) {
+    const p = mn + (mx - mn) * g / 4, y = Y(p);
+    svg.push(`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${padL + plotW}" y2="${y.toFixed(1)}" stroke="#21262d"/>`);
+    svg.push(`<text x="${padL + plotW + 6}" y="${(y + 4).toFixed(1)}" fill="#8b949e" font-size="11">${p.toFixed(2)}</text>`);
+  }
+
+  // day separators
+  const multiDay = bars.some(b => b.date !== bars[0].date);
+  for (let i = 1; i < n; i++) {
+    if (bars[i].date !== bars[i - 1].date) {
+      svg.push(`<line x1="${X(i).toFixed(1)}" y1="${y0}" x2="${X(i).toFixed(1)}" y2="${volBot}" stroke="#3d444d" stroke-dasharray="3 3"/>`);
+    }
+  }
+
+  // volume
+  const maxV = bars.reduce((a, b) => Math.max(a, b.v), 1);
+  const bw = Math.max(1, (plotW / n) * 0.7);
+  bars.forEach((b, i) => {
+    const h = (b.v / maxV) * (volBot - volTop);
+    svg.push(`<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${(volBot - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${b.c >= b.o ? "#2ea04355" : "#da363355"}"/>`);
+  });
+  svg.push(`<text x="${padL + plotW + 6}" y="${volBot}" fill="#8b949e" font-size="10">ווליום</text>`);
+
+  // price area + line
+  const pts = bars.map((b, i) => `${X(i).toFixed(1)},${Y(b.c).toFixed(1)}`);
+  svg.push(`<path d="M${pts[0]} L${pts.slice(1).join(" L")} L${X(n - 1).toFixed(1)},${y1} L${X(0).toFixed(1)},${y1} Z" fill="url(#areaGrad)"/>`);
+  svg.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`);
+
+  // entry price line
+  svg.push(`<line x1="${padL}" y1="${Y(entry).toFixed(1)}" x2="${padL + plotW}" y2="${Y(entry).toFixed(1)}" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+  svg.push(`<text x="${padL + 4}" y="${(Y(entry) - 6).toFixed(1)}" fill="#8b949e" font-size="11">entry $${entry.toFixed(2)}</text>`);
+
+  // stop level over time: a staircase when the trail moved it, else a flat line
+  const hist = (d.stop_history || []).filter(h => h[0] >= bars[0].ms);
+  if (hist.length) {
+    const parts = [];
+    let prevY = null;
+    hist.forEach(([ms, lvl]) => {
+      let i = bars.findIndex(b => b.ms >= ms);
+      if (i < 0) i = n - 1;
+      const x = X(i).toFixed(1), y = Y(lvl);
+      if (prevY === null) parts.push(`M${x},${y.toFixed(1)}`);
+      else parts.push(`L${x},${prevY.toFixed(1)} L${x},${y.toFixed(1)}`);   // step up
+      prevY = y;
+    });
+    parts.push(`L${X(n - 1).toFixed(1)},${prevY.toFixed(1)}`);
+    svg.push(`<path d="${parts.join(" ")}" fill="none" stroke="#da3633" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+  } else if (d.stop != null) {
+    svg.push(`<line x1="${padL}" y1="${Y(d.stop).toFixed(1)}" x2="${padL + plotW}" y2="${Y(d.stop).toFixed(1)}" stroke="#da3633" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+  }
+  if (d.stop != null) {
+    svg.push(`<text x="${padL + 4}" y="${(Y(d.stop) + 14).toFixed(1)}" fill="#f87171" font-size="11">stop $${d.stop.toFixed(2)}</text>`);
+  }
+
+  // the entry moment
+  if (sinceIdx > 0) {
+    const ex = X(sinceIdx);
+    svg.push(`<rect x="${padL}" y="${y0}" width="${(ex - padL).toFixed(1)}" height="${plotH}" fill="#0d111799"/>`);
+    svg.push(`<line x1="${ex.toFixed(1)}" y1="${y0}" x2="${ex.toFixed(1)}" y2="${y1}" stroke="#d29922" stroke-dasharray="4 3"/>`);
+    svg.push(`<circle cx="${ex.toFixed(1)}" cy="${Y(bars[sinceIdx].c).toFixed(1)}" r="4.5" fill="#d29922"/>`);
+  }
+  svg.push(`<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(bars[n - 1].c).toFixed(1)}" r="4.5" fill="${col}"/>`);
+
+  // time axis
+  const ticks = Math.min(6, n);
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round(t * (n - 1) / Math.max(1, ticks - 1));
+    const anchor = t === 0 ? "start" : (t === ticks - 1 ? "end" : "middle");
+    svg.push(`<text x="${X(i).toFixed(1)}" y="${H - 5}" fill="#8b949e" font-size="11" text-anchor="${anchor}">${multiDay ? bars[i].date + " " : ""}${bars[i].t}</text>`);
+  }
+
+  // hover crosshair
+  svg.push(`<line id="chX" x1="0" y1="${y0}" x2="0" y2="${volBot}" stroke="#8b949e" stroke-dasharray="3 3" opacity="0"/>`);
+  svg.push(`<circle id="chDot" cx="0" cy="0" r="4" fill="#e6edf3" opacity="0"/>`);
+  svg.push(`</svg>`);
+
+  wrap.innerHTML = '<div id="tip"></div>' + svg.join("");
+
+  const svgEl = document.getElementById("chartSvg");
+  const tip = document.getElementById("tip");
+  const cx = document.getElementById("chX"), dot = document.getElementById("chDot");
+
+  svgEl.addEventListener("mousemove", ev => {
+    const r = svgEl.getBoundingClientRect();
+    let i = Math.round(((ev.clientX - r.left) - padL) / (plotW || 1) * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    const b = bars[i], px = X(i), py = Y(b.c);
+    cx.setAttribute("x1", px); cx.setAttribute("x2", px); cx.setAttribute("opacity", "0.7");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("opacity", "1");
+    const chg = (b.c - entry) / entry * 100;
+    tip.innerHTML = `<b class="num" style="display:block">${b.date} ${b.t}</b>` +
+      `<span class="num" style="display:block">$${b.c.toFixed(2)}</span>` +
+      `<span class="${chg >= 0 ? "pos" : "neg"}"><span class="num" style="display:inline-block">${pct(chg)}</span> מהכניסה</span>` +
+      `<br><span style="color:var(--dim)">ווליום <span class="num" style="display:inline-block">${Math.round(b.v).toLocaleString("en-US")}</span></span>`;
+    tip.style.display = "block";
+    tip.style.left = Math.max(2, Math.min(W - tip.offsetWidth - 2, px - tip.offsetWidth / 2)) + "px";
+    tip.style.top = Math.max(2, py - tip.offsetHeight - 12) + "px";
+  });
+  svgEl.addEventListener("mouseleave", () => {
+    tip.style.display = "none";
+    cx.setAttribute("opacity", "0"); dot.setAttribute("opacity", "0");
+  });
+
+  document.getElementById("legLine").style.borderColor = col;
+}
+
+document.addEventListener("keydown", e => { if (e.key === "Escape" && chartSym) closeChart(); });
+window.addEventListener("resize", () => { if (chartData) renderChart(); });
+
+window.addEventListener("resize", () => { if (view === "perf") loadPerformance(); });
+
+document.getElementById("simCustom").addEventListener("keydown", e => {
+  if (e.key === "Enter") simAddCustom();
+});
+document.getElementById("customSym").addEventListener("keydown", e => {
+  if (e.key === "Enter") addCustom();
+});
+
+refresh();
+loadTrades();
+setInterval(tickCountdown, 1000);
+setInterval(refresh, 4000);
+setInterval(() => { loadTrades(); if (view === "perf") loadPerformance(); }, 30000);
+</script>
+</body>
+</html>
