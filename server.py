@@ -322,6 +322,48 @@ def status():
 PERIODS = {"today": 0, "week": 7, "month": 30, "all": None}
 
 
+def _lan_address() -> str:
+    """This machine's address on the local network, as the phone sees it."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))       # nothing is sent; this just picks the route
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return ""
+
+
+@app.get("/api/connect")
+def connect_info():
+    """Everything needed to open this dashboard on a phone.
+
+    Guarded by the same token gate as the rest of the API, so a stranger on the
+    Wi-Fi cannot ask the server to hand out its own access token.
+    """
+    ip = _lan_address()
+    if not ip:
+        return jsonify({"ok": False, "error": "לא נמצאה כתובת ברשת המקומית — בדוק חיבור Wi-Fi"}), 503
+
+    port = config.dashboard_port
+    url = f"http://{ip}:{port}/?token={ACCESS_TOKEN}"
+    payload = {
+        "ok": True,
+        "url": url,
+        "short_url": f"http://{ip}:{port}",
+        "exposed": config.dashboard_host == "0.0.0.0",
+        "qr": None,
+    }
+    try:
+        import segno
+        payload["qr"] = segno.make(url, error="m").svg_inline(
+            scale=5, border=2, dark="#0d1117", light="#ffffff"
+        )
+    except ImportError:
+        payload["qr_hint"] = "להצגת QR:  ./.venv/bin/pip install segno"
+    return jsonify(payload)
+
+
 @app.get("/api/trades")
 def trades():
     """Closed-trade journal + aggregate performance for a time window."""
@@ -613,6 +655,39 @@ def focus():
     apply_focus(symbols)
     logging.getLogger("server").info("Focus updated: %s", ", ".join(symbols))
     return jsonify({"ok": True})
+
+
+_intel_cache: dict = {"ts": None, "data": {}, "quality": None}
+
+
+@app.get("/api/intel")
+def intel():
+    """Opening intelligence for the focus list — display only, never a trade
+    filter (backtest showed filters hurt on a fixed megacap universe)."""
+    import opening_intel as oi
+
+    now_et = datetime.now(ET)
+    if now_et.weekday() >= 5 or (now_et.hour, now_et.minute) < (9, 36):
+        return jsonify({"ready": False, "reason": "לפני פתיחה — המודיעין מוכן מ-16:36 שעון ישראל"})
+
+    feed = "sip" if (now_et.hour, now_et.minute) >= (9, 52) else "iex"
+    cache_age = (datetime.now() - _intel_cache["ts"]).total_seconds() if _intel_cache["ts"] else 1e9
+    if cache_age > 300 or _intel_cache["quality"] != feed:
+        symbols = state["focus"] or DEFAULT_UNIVERSE
+        try:
+            baseline = oi.compute_baseline(_account_broker.data, symbols, feed)
+            data = oi.compute_today(_account_broker.data, symbols, baseline, feed)
+            _intel_cache.update(ts=datetime.now(), data=data, quality=feed)
+        except Exception as e:
+            logging.getLogger("server").warning("Intel failed: %s", e)
+            return jsonify({"ready": False, "reason": str(e)})
+
+    rows = []
+    for sym, d in _intel_cache["data"].items():
+        hot = (d.get("rvol") or 0) >= 1.5 or abs(d.get("gap_pct") or 0) >= 2
+        rows.append({**d, "symbol": sym, "hot": hot})
+    rows.sort(key=lambda r: (r.get("rvol") or 0), reverse=True)
+    return jsonify({"ready": True, "quality": _intel_cache["quality"], "rows": rows})
 
 
 @app.post("/api/simulate")
