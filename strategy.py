@@ -134,6 +134,13 @@ class TrailingStopManager:
         if stop_distance is not None and stop_distance > 0:
             stop_loss = entry_price - stop_distance
             trail_activate = self.cfg.atr_trail_activate * stop_distance
+            # A trail derived from the DAILY ATR can exceed the whole intraday
+            # move on a volatile name: INTC's 6.3% ATR put the trail 2.21% below
+            # the high, so the stop only cleared break-even after a 2.21% gain.
+            # The cap binds on exactly those names and leaves calm ones alone.
+            cap = getattr(self.cfg, "trail_cap_pct", None)
+            if cap and trail_distance is not None:
+                trail_distance = min(trail_distance, entry_price * cap / 100)
         else:
             stop_loss = entry_price * (1 - self.cfg.initial_stop_loss_pct / 100)
             trail_activate = entry_price * self.cfg.min_profit_to_trail_pct / 100

@@ -32,21 +32,39 @@ def _bars_to_df(bars: list) -> pd.DataFrame:
     return df[~df.index.duplicated(keep="last")]
 
 
-def download_symbol(
+def _cache_file(symbol: str) -> Path:
+    return CACHE_DIR / f"{symbol}.parquet"
+
+
+def merge_into_cache(symbol: str, fresh: pd.DataFrame) -> pd.DataFrame:
+    """Add bars to a symbol's cache without losing what is already there.
+
+    force=True used to overwrite the file with just the requested window, so
+    asking for three days of NVDA silently threw away three months of it. Any
+    caller that needs a *newer* range must merge, not replace.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_file(symbol)
+    if fresh.empty:
+        return pd.read_parquet(path) if path.exists() else fresh
+    merged = fresh
+    if path.exists():
+        old = pd.read_parquet(path)
+        if not old.empty:
+            merged = pd.concat([old, fresh]).sort_index()
+            merged = merged[~merged.index.duplicated(keep="last")]
+    merged.to_parquet(path)
+    logger.info("  %s: cache now holds %d minute bars", symbol, len(merged))
+    return merged
+
+
+def fetch_range(
     client: StockHistoricalDataClient,
     symbol: str,
     start: str,
     end: str,
-    force: bool = False,
 ) -> pd.DataFrame:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = CACHE_DIR / f"{symbol}.parquet"
-
-    if cache_file.exists() and not force:
-        df = pd.read_parquet(cache_file)
-        logger.info("  %s: loaded %d bars from cache", symbol, len(df))
-        return df
-
+    """Download a window straight from Alpaca. Never touches the cache."""
     start_ts = pd.Timestamp(start, tz=ET)
     end_ts = pd.Timestamp(end, tz=ET)
     chunks: list[pd.DataFrame] = []
@@ -76,10 +94,28 @@ def download_symbol(
         return pd.DataFrame()
 
     df = pd.concat(chunks).sort_index()
-    df = df[~df.index.duplicated(keep="last")]
-    df.to_parquet(cache_file)
-    logger.info("  %s: saved %d minute bars", symbol, len(df))
-    return df
+    return df[~df.index.duplicated(keep="last")]
+
+
+def download_symbol(
+    client: StockHistoricalDataClient,
+    symbol: str,
+    start: str,
+    end: str,
+    force: bool = False,
+) -> pd.DataFrame:
+    """Cached minute bars. `force` refetches the window and MERGES it in, so a
+    narrow request can never shrink a wide cache."""
+    cache_file = _cache_file(symbol)
+    if cache_file.exists() and not force:
+        df = pd.read_parquet(cache_file)
+        logger.info("  %s: loaded %d bars from cache", symbol, len(df))
+        return df
+
+    fresh = fetch_range(client, symbol, start, end)
+    if fresh.empty and cache_file.exists():
+        return pd.read_parquet(cache_file)
+    return merge_into_cache(symbol, fresh)
 
 
 def load_all(symbols: list[str], start: str, end: str, force: bool = False) -> dict[str, pd.DataFrame]:

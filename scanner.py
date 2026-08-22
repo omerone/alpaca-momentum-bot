@@ -200,8 +200,101 @@ class MomentumScanner:
 
         return candidates
 
+    def scan_shorts(self) -> list[MomentumCandidate]:
+        """Mirror scan for weak tape: falling tick + below VWAP + volume spike.
+        Runs INSTEAD of scan() when the SPY gate says the market is weak, so it
+        costs no extra API budget."""
+        candidates = []
+        current_prices = self._get_all_prices()
+        intraday_bars = self._get_intraday_bars()
+
+        if not current_prices:
+            return []
+
+        for symbol, price in current_prices.items():
+            if price < self.cfg.min_price or price > self.cfg.max_price:
+                continue
+
+            last_price = self._last_prices.get(symbol)
+            if last_price is None or last_price <= 0:
+                continue
+
+            tick_change = ((price - last_price) / last_price) * 100
+            if tick_change > -self.cfg.min_momentum_pct:
+                continue
+
+            bars = intraday_bars.get(symbol, [])
+            if not bars:
+                continue
+
+            vwap = calculate_vwap(bars)
+            if vwap <= 0 or price >= vwap:
+                continue
+
+            price_vs_vwap = ((price - vwap) / vwap) * 100
+            if price_vs_vwap > -self.cfg.min_vwap_distance_pct:
+                continue
+
+            vol_ratio = calculate_volume_ratio(bars, self.cfg.volume_lookback_bars)
+            if vol_ratio < self.cfg.min_volume_ratio:
+                continue
+
+            score = (-tick_change * 10) + (-price_vs_vwap * 2) + vol_ratio * 5
+
+            candidates.append(MomentumCandidate(
+                symbol=symbol,
+                price=price,
+                tick_change_pct=round(tick_change, 4),
+                bar_change_pct=0.0,
+                rising_bars=0,
+                vwap=round(vwap, 2),
+                price_vs_vwap_pct=round(price_vs_vwap, 4),
+                volume_ratio=round(vol_ratio, 2),
+                score=round(score, 4),
+            ))
+
+        self._last_prices.update(current_prices)
+
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        if candidates:
+            logger.info("Weak-tape momentum (short signals): %d stocks", len(candidates))
+        return candidates
+
     def get_current_price(self, symbol: str) -> float | None:
         return self._get_all_prices().get(symbol)
+
+    def spy_above_vwap(self) -> bool | None:
+        """Market gate: is SPY trading above its intraday VWAP right now?
+        Cached 60s. Returns None (fail-open) when data is unavailable —
+        a data hiccup must not paralyze the bot."""
+        now = datetime.now(ET)
+        cached = getattr(self, "_spy_gate_cache", None)
+        if cached and (now - cached[0]).total_seconds() < 60:
+            return cached[1]
+
+        start = self._market_open_today()
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols="SPY",
+                timeframe=TimeFrame.Minute,
+                start=start,
+                end=now,
+                feed=DataFeed.IEX,
+            )
+            bars = self.client.get_stock_bars(request).data.get("SPY", [])
+        except Exception as e:
+            logger.warning("SPY gate data failed: %s", e)
+            self._spy_gate_cache = (now, None)
+            return None
+
+        if len(bars) < 3:
+            self._spy_gate_cache = (now, None)
+            return None
+
+        vwap = calculate_vwap(bars)
+        above = float(bars[-1].close) > vwap if vwap > 0 else None
+        self._spy_gate_cache = (now, above)
+        return above
 
     def get_daily_atrs(self) -> dict[str, float]:
         """14-day ATR per symbol from daily bars (for volatility-scaled stops)."""
@@ -221,6 +314,8 @@ class MomentumScanner:
             return {}
 
         atrs = {}
+        today = datetime.now(ET).date()
+        self.prev_closes: dict[str, float] = getattr(self, "prev_closes", {})
         for symbol, bars in data.items():
             if len(bars) < 6:
                 continue
@@ -230,5 +325,10 @@ class MomentumScanner:
                 trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
             window = trs[-self.cfg.atr_period_days:]
             atrs[symbol] = sum(window) / len(window)
+            # yesterday's official close (skip today's partial bar) — SSR guard input
+            for b in reversed(bars):
+                if b.timestamp.astimezone(ET).date() < today:
+                    self.prev_closes[symbol] = float(b.close)
+                    break
         logger.info("Daily ATR loaded for %d symbols", len(atrs))
         return atrs
