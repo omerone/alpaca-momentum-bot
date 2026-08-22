@@ -79,6 +79,18 @@
   #powerState { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
   .power-info small { color: var(--dim); line-height: 1.6; display: block; }
 
+  /* "why is the bot not buying right now" — the answer used to live only in
+     debug logs, so the dashboard looked broken whenever a gate was closed */
+  .gate {
+    display: flex; align-items: flex-start; gap: 7px; margin: 8px 0 10px;
+    border-radius: 8px; padding: 8px 11px; font-size: 12.5px; line-height: 1.6;
+    border: 1px solid var(--border); background: #0d1117; color: var(--dim);
+  }
+  .gate.hunting { border-color: #1f5132; background: #12291b; color: #7ee2a8; }
+  .gate.blocked { border-color: #7a2a2a; background: #2a1414; color: #f0a0a0; }
+  .gate.full    { border-color: #7a5a1a; background: #2a2212; color: #f0c674; }
+  .gate .dot { font-size: 13px; line-height: 1.5; flex: none; }
+
   /* symbols */
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
   .chip {
@@ -109,6 +121,9 @@
   .pos { color: #4ade80; } .neg { color: #f87171; }
   /* numbers must stay LTR inside the RTL page, otherwise the minus sign jumps around */
   .num { direction: ltr; unicode-bidi: isolate; text-align: right; font-variant-numeric: tabular-nums; }
+  /* mixed Hebrew+numbers ("שעה ו-29 דקות") inside an LTR .num box: without an RTL
+     island the bidi algorithm reorders the parts and the text reads backwards */
+  .dur { direction: rtl; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
   .pl { display: inline-flex; align-items: center; gap: 7px; direction: ltr; unicode-bidi: isolate; }
   .pl .amt { font-size: 14px; font-weight: 700; }
   .pl .pc { font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
@@ -151,6 +166,28 @@
   .chartbox { position: relative; direction: ltr; min-height: 60px; }
   .chartbox .empty { color: var(--dim); padding: 34px 0; text-align: center; direction: rtl; font-size: 13px; }
   .note { color: var(--dim); font-size: 12px; margin-top: 10px; }
+
+  /* plain-language explainers: every card says what it is, every cryptic column
+     carries its own definition — no hover needed (hover does not exist on a phone) */
+  .hint { color: var(--dim); font-size: 12.5px; line-height: 1.75; margin: -6px 0 14px; }
+  .hint b { color: var(--text); font-weight: 600; }
+  th .sub { display: block; font-size: 10.5px; font-weight: 400; color: #6e7681; margin-top: 3px; }
+  /* a Hebrew explainer inside an LTR number cell must flip back to RTL */
+  td.num .sub { display: block; direction: rtl; text-align: right; white-space: normal;
+                font-size: 10.5px; color: var(--dim); margin-top: 4px; }
+  .st { line-height: 1.45; }
+  .st .sub { display: block; font-size: 11px; color: var(--dim); }
+  details.gloss > summary {
+    cursor: pointer; color: #79b8ff; font-size: 13px; font-weight: 600;
+    list-style: none; padding: 2px 0;
+  }
+  details.gloss > summary::-webkit-details-marker { display: none; }
+  details.gloss > summary::before { content: "▸  "; }
+  details.gloss[open] > summary::before { content: "▾  "; }
+  .gterm { border-bottom: 1px solid #21262d; padding: 10px 2px; font-size: 13px; line-height: 1.75; }
+  .gterm:last-child { border-bottom: 0; }
+  .gterm b { color: var(--text); }
+  .gterm em { color: var(--dim); font-style: normal; }
   .tblwrap { overflow-x: auto; }
   .bar-cell { display: flex; align-items: center; gap: 8px; direction: ltr; }
   .bar-cell .track { flex: 1; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; min-width: 40px; }
@@ -246,6 +283,7 @@
   <span class="vtab sel" data-v="trade">מסחר</span>
   <span class="vtab" data-v="perf">ביצועים</span>
   <span class="vtab" data-v="sim">סימולטור</span>
+  <span class="vtab" data-v="research">חקירה</span>
 </nav>
 
 <div class="grid" id="viewTrade">
@@ -256,6 +294,7 @@
       <button id="powerBtn" class="off" onclick="toggleBot()">כבוי</button>
       <div class="power-info">
         <div id="powerState">האוטומציה כבויה</div>
+        <div id="gate" class="gate" hidden></div>
         <small id="powerHint">בחר מניות למיקוד ולחץ על הכפתור כדי להפעיל.
         כשהאוטומציה פועלת היא קונה רק בחלון <b id="entryWin"></b>, וסוגרת הכל לפני סוף היום.
         עצירה לא מוכרת פוזיציות קיימות.</small>
@@ -265,6 +304,7 @@
 
   <div class="card">
     <h2>מניות למיקוד — על מה הבוט יעבוד היום</h2>
+    <div class="hint">מסומן בכחול = הבוט סורק אותה. <b>לא מסומן = הוא לא ייגע בה בכלל.</b></div>
     <div id="chips" class="chips"></div>
     <div class="sym-actions">
       <input type="text" id="customSym" placeholder="הוסף סימבול (למשל NBIS)" maxlength="6">
@@ -278,6 +318,8 @@
 
   <div class="card full">
     <h2>חשבון ופוזיציות (Paper — כסף דמה)</h2>
+    <div class="hint">מה מוחזק ברגע זה. <b>רווח/הפסד פתוח</b> = כמה שווה מה שביד לעומת מחיר הקנייה —
+      עוד לא נסגר, המספר זז כל שנייה. <b>Stop</b> = המחיר שבו נמכור אוטומטית כדי לעצור הפסד.</div>
     <div class="stats">
       <div class="stat"><div class="v num" id="equity">—</div><div class="k">שווי תיק</div></div>
       <div class="stat"><div class="v num" id="cash">—</div><div class="k">מזומן</div></div>
@@ -286,16 +328,34 @@
     </div>
     <div id="guardBar" class="guard" style="display:none"></div>
     <div class="tblwrap"><table>
-      <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>רווח/הפסד</th><th>Stop</th><th></th></tr></thead>
-      <tbody id="posBody"><tr><td colspan="8" style="color:var(--dim)">טוען...</td></tr></tbody>
+      <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>שווי הפוזיציה</th><th>רווח/הפסד</th><th>Stop</th><th></th></tr></thead>
+      <tbody id="posBody"><tr><td colspan="9" style="color:var(--dim)">טוען...</td></tr></tbody>
     </table></div>
     <div style="color:var(--dim);font-size:12px;margin-top:10px">לחץ על שורה כדי לראות גרף מלא מרגע הכניסה ועד עכשיו</div>
   </div>
 
+  <div class="card full">
+    <h2>היסטוריית פעולות — מה הבוט עשה היום</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>מניה</th><th>נקנה</th><th>מחיר קנייה</th><th>נמכר</th><th>מחיר מכירה</th><th>משך</th><th>רווח/הפסד</th><th>סיבת מכירה</th></tr></thead>
+      <tbody id="historyBody"><tr><td colspan="8" style="color:var(--dim)">אין עסקאות סגורות היום</td></tr></tbody>
+    </table></div>
+    <div class="note">המחירים לפי רגע ההחלטה של הבוט — הביצוע המדויק אצל הברוקר יכול להיות מעט שונה.
+    היסטוריה מלאה, פילוחים וגרפים — בטאב "ביצועים".</div>
+  </div>
+
   <div class="card full" id="intelCard" hidden>
     <h2>מודיעין פתיחה — מה קרה הבוקר במניות שלך</h2>
+    <div class="hint">תמונת מצב של חמש הדקות הראשונות של המסחר.
+      <b>מידע בלבד — הבוט לא מחליט לפי הטבלה הזאת</b> (בדקנו בסימולציה: סינון לפי המספרים האלה הזיק).</div>
     <div class="tblwrap"><table>
-      <thead><tr><th>מניה</th><th>גאפ מאתמול</th><th>נפח פתיחה (RVOL)</th><th>נפח פרה-מרקט</th><th>סטטוס</th></tr></thead>
+      <thead><tr>
+        <th>מניה</th>
+        <th>פער פתיחה<span class="sub">מחיר הפתיחה מול סגירת אתמול</span></th>
+        <th>נפח בפתיחה (RVOL)<span class="sub">פי כמה מהרגיל נסחר ב-5 הדקות הראשונות</span></th>
+        <th>נפח לפני הפתיחה<span class="sub">מניות שנסחרו 11:00–16:30 שעון ישראל</span></th>
+        <th>מה זה אומר</th>
+      </tr></thead>
       <tbody id="intelBody"></tbody>
     </table></div>
     <div class="note" id="intelNote"></div>
@@ -303,7 +363,45 @@
 
   <div class="card full">
     <h2>לוג חי</h2>
+    <div class="hint">מה הבוט עושה ממש עכשיו. שורות שממשיכות להיכתב = הוא חי ובודק.<br>
+      פענוח שורת סריקה — <b>tick</b> כמה המניה זזה מאז הבדיקה הקודמת ·
+      <b>vwap</b> המחיר הממוצע של היום ובסוגריים כמה אנחנו מעליו ·
+      <b>vol</b> פי כמה מהרגיל הנפח · <b>@</b> המחיר עכשיו.
+      "HOLDINGS REPORT" = סיכום מה מוחזק, נכתב פעם בדקה.</div>
     <div id="log"></div>
+  </div>
+
+  <div class="card full">
+    <h2>מילון — מה כל מילה כאן אומרת</h2>
+    <details class="gloss">
+      <summary>פתח את המילון</summary>
+      <div class="gterm"><b>פוזיציה</b> — <em>מניה שקנינו ועדיין מחזיקים. "5 פוזיציות" = מחזיקים 5 מניות שונות.</em></div>
+      <div class="gterm"><b>לונג / שורט</b> — <em>לונג = קונים ומרוויחים כשעולה (זה מה שהבוט עושה).
+        שורט = ההפך, מרוויחים כשיורד — קיים רק בסימולטור, לא בחשבון האמיתי.</em></div>
+      <div class="gterm"><b>Stop (סטופ)</b> — <em>מחיר רצפה. אם המניה יורדת אליו — מוכרים מיד, בלי להתווכח.
+        ככה הפסד נשאר קטן.</em></div>
+      <div class="gterm"><b>טריילינג סטופ</b> — <em>סטופ שמטפס. כשהמניה עולה הרצפה עולה איתה, ואם היא מתהפכת
+        אנחנו יוצאים עם רווח במקום להחזיר אותו.</em></div>
+      <div class="gterm"><b>ATR</b> — <em>כמה המניה זזה ביום ממוצע. הסטופ נקבע לפי זה: למניה תזזיתית סטופ רחב,
+        לרגועה צר — במקום אחוז קבוע שמתאים לאף אחת.</em></div>
+      <div class="gterm"><b>VWAP</b> — <em>המחיר הממוצע ששולם היום, משוקלל בנפח. מעליו = הקונים שולטים,
+        מתחתיו = המוכרים. הבוט קונה רק מעל.</em></div>
+      <div class="gterm"><b>מומנטום</b> — <em>מניה שכבר בתנועה למעלה עם נפח חריג. הבוט רוכב על תנועה קיימת,
+        הוא לא מנחש מתי היא תתחיל.</em></div>
+      <div class="gterm"><b>פער פתיחה (גאפ)</b> — <em>הפרש בין מחיר הפתיחה לסגירת אתמול. קרה בזמן שהשוק היה סגור.</em></div>
+      <div class="gterm"><b>RVOL</b> — <em>נפח יחסי. פי כמה נסחר היום לעומת הרגיל באותן דקות.
+        1.0x = יום רגיל, 3x = משהו קורה, 0.5x = חצי מהרגיל.</em></div>
+      <div class="gterm"><b>פרה-מרקט</b> — <em>מסחר לפני הפתיחה הרשמית, 11:00–16:30 שעון ישראל.
+        המחירים זזים אבל <b>הבוט לא נוגע</b> — הנזילות שם דקה.</em></div>
+      <div class="gterm"><b>חלון כניסה</b> — <em>השעות היחידות שבהן הבוט קונה (16:35–18:00 שעון ישראל).
+        אחרי זה השוק מדשדש ורק אוכל סטופים.</em></div>
+      <div class="gterm"><b>רווח פתוח מול ממומש</b> — <em>פתוח = על הנייר, עוד מחזיקים.
+        ממומש = מכרנו, הכסף סגור. רק ממומש נכנס לדוחות הביצועים.</em></div>
+      <div class="gterm"><b>הצלחה (Win rate)</b> — <em>אחוז העסקאות שנסגרו ברווח. אחוז גבוה לא מספיק —
+        אפשר לנצח 80% מהפעמים ועדיין להפסיד אם ההפסדים גדולים.</em></div>
+      <div class="gterm"><b>Profit Factor</b> — <em>סך הרווחים חלקי סך ההפסדים. מעל 1 = רווחי. 2 = הרווחנו כפול ממה שהפסדנו.</em></div>
+      <div class="gterm"><b>Paper</b> — <em>כסף דמה. חשבון תרגול אמיתי לגמרי מבחינת מחירים, אפס סיכון כספי.</em></div>
+    </details>
   </div>
 
 </div>
@@ -319,7 +417,8 @@
     </div>
     <div class="stats" id="eqStats"><span style="color:var(--dim);font-size:13px">טוען...</span></div>
     <div class="chartbox" id="eqChart"></div>
-    <div class="note">שווי התיק לאורך זמן — כולל פוזיציות פתוחות, ישירות מ-Alpaca. זה הקו שאומר אם אנחנו מרוויחים.</div>
+    <div class="note">שווי התיק לפי <b>עסקאות סגורות בלבד</b>. הקו זז רק כשעסקה נסגרת — פוזיציה פתוחה שמתנדנדת לא משפיעה עליו,
+      ולכן זה הקו שאומר אם האסטרטגיה באמת מרוויחה. את הרווח הלא-ממומש של הפוזיציות הפתוחות רואים בלשונית "מסחר".</div>
   </div>
 
   <div class="card full">
@@ -330,8 +429,11 @@
 
   <div class="card">
     <h2>לפי מניה — מי מרוויח ומי שורף</h2>
+    <div class="hint">רק עסקאות שכבר נסגרו. אם מניה שורפת כסף לאורך זמן — הורד לה את הסימון במיקוד.</div>
     <div class="tblwrap"><table>
-      <thead><tr><th>מניה</th><th>עסקאות</th><th>הצלחה</th><th>רווח/הפסד</th></tr></thead>
+      <thead><tr><th>מניה</th><th>עסקאות</th>
+        <th>הצלחה<span class="sub">% מהעסקאות שנסגרו ברווח</span></th>
+        <th>רווח/הפסד<span class="sub">בדולרים, מצטבר</span></th></tr></thead>
       <tbody id="bySymbol"></tbody>
     </table></div>
   </div>
@@ -347,6 +449,8 @@
 
   <div class="card full">
     <h2>לפי סיבת יציאה</h2>
+    <div class="hint">למה הפוזיציה נסגרה. <b>סטופ</b> = ירדה לרצפה שהגדרנו · <b>טריילינג</b> = עלתה ואז התהפכה,
+      יצאנו עם רווח · <b>סוף יום</b> = סגרנו לפני הפעמון. אם רוב הכסף הולך ב"סטופ" — הסטופ צר מדי.</div>
     <div class="tblwrap"><table>
       <thead><tr><th>סיבה</th><th>עסקאות</th><th>הצלחה</th><th>רווח/הפסד</th></tr></thead>
       <tbody id="byReason"></tbody>
@@ -355,6 +459,8 @@
 
   <div class="card full">
     <h2>עסקאות סגורות</h2>
+    <div class="hint">כל עסקה שהסתיימה. <b>Stop התחלתי</b> = הרצפה ברגע הקנייה, <b>Stop בסגירה</b> = לאן היא טיפסה
+      עד היציאה — הפער ביניהם הוא הרווח שהטריילינג שמר.</div>
     <div class="stats" id="jStats"><span style="color:var(--dim);font-size:13px">טוען...</span></div>
     <div class="tblwrap"><table>
       <thead><tr><th>מניה</th><th>כמות</th><th>כניסה</th><th>יציאה</th><th>רווח/הפסד</th><th>Stop התחלתי</th><th>Stop בסגירה</th><th>סיבה</th><th>משך</th><th>נסגר</th></tr></thead>
@@ -368,6 +474,8 @@
 
   <div class="card full">
     <h2>סימולטור אסטרטגיות — לונג מול שורט על נתונים היסטוריים אמיתיים</h2>
+    <div class="hint">"מה היה קורה אילו הפעלנו את הבוט בתאריכים האלה?" — רץ על מחירי עבר אמיתיים.
+      <b>לא נוגע בחשבון ולא בכסף.</b></div>
     <div id="simChips" class="chips"></div>
     <div class="sym-actions" style="margin-bottom:12px;align-items:center">
       <input type="text" id="simCustom" style="width:150px" placeholder="הוסף סימבול" maxlength="6">
@@ -423,6 +531,56 @@
     <div class="tblwrap"><table>
       <thead><tr><th>מניה</th><th>כיוון</th><th>כניסה</th><th>יציאה</th><th>מחיר כניסה</th><th>מחיר יציאה</th><th>רווח/הפסד</th><th>סיבה</th></tr></thead>
       <tbody id="simTrades"></tbody>
+    </table></div>
+  </div>
+
+</div>
+
+<div class="grid" id="viewResearch" hidden>
+
+  <div class="card full">
+    <h2>חקירה יומית — מה למדנו מכל עסקה</h2>
+    <div class="hint">אחרי סגירת המסחר המערכת מריצה כל עסקה מחדש מול נרות הדקה של אותו יום ובודקת:
+      כמה המניה עוד עלתה אחרי שמכרנו, כמה ירדה, ומה היה קורה עם הגדרות אחרות.
+      <b>המערכת ממליצה בלבד — היא לא משנה שום הגדרה בעצמה.</b></div>
+    <div class="sym-actions">
+      <button class="small" onclick="runResearch(false)" id="resRunBtn">▶ חקור עסקאות חדשות</button>
+      <button class="small" onclick="runResearch(true)">חשב הכל מחדש</button>
+    </div>
+    <div id="resStatus" style="margin-top:10px;color:var(--yellow);font-size:13px"></div>
+  </div>
+
+  <div class="card full">
+    <h2>מסקנות — מה כדאי לשנות</h2>
+    <div id="resConclusions"><span style="color:var(--dim);font-size:13px">טוען...</span></div>
+  </div>
+
+  <div class="card full">
+    <h2>סריקת הגדרות — אותן כניסות, יציאות אחרות</h2>
+    <div class="hint">לוקח את הכניסות שהבוט באמת עשה ומריץ אותן מחדש עם רוחב סטופ וטריילינג שונים.
+      ההשוואה היא מול השורה המסומנת "נוכחי" — היא ההגדרות שרצות עכשיו.</div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>גרסה</th><th>סה"כ רווח/הפסד</th><th>ממוצע לעסקה</th><th>הצלחה</th><th>עסקאות</th><th>הגדרות</th></tr></thead>
+      <tbody id="resSweep"><tr><td colspan="6" style="color:var(--dim)">טוען...</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div class="card full">
+    <h2>נתיחת עסקאות — מה קרה בכל אחת</h2>
+    <div class="hint"><b>שיא בהחזקה</b> = הנקודה הכי טובה שהייתה לנו על הנייר ·
+      <b>נתפס</b> = כמה אחוז מהתנועה הזאת שמרנו · <b>אחרי היציאה</b> = לאן המניה הלכה אחרי שמכרנו ·
+      <b>לפי הספר</b> = מה חוקי המערכת היו נותנים. פער גדול שם = הבוט לא ביצע את הכללים שלו.</div>
+    <div class="tblwrap"><table>
+      <thead><tr>
+        <th>מניה</th><th>יום</th><th>בפועל</th>
+        <th>שיא בהחזקה<span class="sub">MFE</span></th>
+        <th>נתפס</th>
+        <th>אחרי היציאה<span class="sub">עלייה / ירידה</span></th>
+        <th>עד הסגירה</th>
+        <th>לפי הספר</th>
+        <th>מסקנה</th>
+      </tr></thead>
+      <tbody id="resTrades"><tr><td colspan="9" style="color:var(--dim)">טוען...</td></tr></tbody>
     </table></div>
   </div>
 
@@ -563,6 +721,14 @@ async function refresh() {
               : "האוטומציה כבויה";
     document.getElementById("applyBtn").style.display = running ? "" : "none";
 
+    const g = document.getElementById("gate");
+    g.hidden = !s.gate;                    // absent until the server is restarted
+    if (s.gate) {
+      const icon = {off: "⏸", wait: "⏰", full: "⛔", blocked: "🔴", hunting: "🟢"}[s.gate.state] || "•";
+      g.className = "gate " + s.gate.state;
+      g.innerHTML = `<span class="dot">${icon}</span><span>${s.gate.txt}</span>`;
+    }
+
     if (s.account) {
       document.getElementById("equity").textContent = fmt(s.account.equity);
       document.getElementById("cash").textContent = fmt(s.account.cash);
@@ -600,10 +766,11 @@ async function refresh() {
         <td class="num">${p.qty.toFixed(2)}</td>
         <td class="num">${fmt(p.entry_price)}</td>
         <td class="num">${fmt(p.current_price)}</td>
+        <td class="num"><b>${fmt(p.qty * p.current_price)}</b></td>
         <td class="${cls}"><span class="pl"><span>${arrow}</span><span class="amt">${fmtSigned(p.unrealized_pl)}</span><span class="pc">${pct(p.unrealized_plpc)}</span></span></td>
         <td class="num">${stopCell(p)}</td>
         <td class="go">גרף ›</td></tr>`;
-    }).join("") : `<tr><td colspan="8" style="color:var(--dim)">אין פוזיציות פתוחות</td></tr>`;
+    }).join("") : `<tr><td colspan="9" style="color:var(--dim)">אין פוזיציות פתוחות</td></tr>`;
 
     renderGuardBar(s);
     if (view === "sim") renderSimChips();
@@ -614,6 +781,7 @@ async function refresh() {
     if (atBottom) log.scrollTop = log.scrollHeight;
 
     loadIntel();
+    loadHistory();
   } catch (e) { /* server briefly unavailable */ }
 }
 
@@ -629,8 +797,14 @@ function whenCell(when, heldSeconds) {
 function stopCell(p) {
   const price = p.stop != null ? p.stop : p.broker_stop;
   if (price == null) return "—";
-  if (!p.protected)
-    return `${fmt(price)} <span class="badge off" title="אין סטופ אצל הברוקר — מוגן רק כשהבוט רץ">חשוף</span>`;
+  if (!p.protected) {
+    // say WHY it is exposed — "fewer than one whole share" is a hard Alpaca
+    // limit that "הגן עכשיו" cannot fix, and that difference matters
+    const sub = p.qty < 1
+      ? `פחות ממניה שלמה (${p.qty.toFixed(2)}) — Alpaca לא מקבל סטופ על שבריר`
+      : "הסטופ אצל הברוקר לא הוצב — מוגן רק כל עוד הבוט רץ";
+    return `${fmt(price)} <span class="badge off">חשוף</span><span class="sub">${sub}</span>`;
+  }
   // Alpaca refuses stop orders on fractions, so the leftover fraction is uncovered
   const covered = p.broker_stop_qty || 0;
   const partial = p.qty - covered > 0.01;
@@ -643,7 +817,22 @@ function renderGuardBar(s) {
   const bar = document.getElementById("guardBar");
   if (!s.positions.length || !s.broker_stop_enabled) { bar.style.display = "none"; return; }
   bar.style.display = "flex";
-  if (s.unprotected > 0) {
+  // A position under one whole share can NEVER get a broker stop (Alpaca
+  // limitation), so "הגן עכשיו" would silently do nothing. Say so, and offer
+  // the only real remedy: close it.
+  const tiny = s.positions.filter(p => !p.protected && p.qty < 1);
+  const fixable = s.unprotected - tiny.length;
+  if (tiny.length) {
+    bar.className = "guard warn";
+    bar.innerHTML =
+      `<span>⚠ <b>${tiny.map(p => p.symbol).join(", ")}</b> — פחות ממניה שלמה, ולכן Alpaca לא מקבל שם הוראת סטופ.
+       "הגן עכשיו" לא יעזור. מוגן רק כל עוד הבוט רץ.` +
+      (fixable > 0 ? ` ועוד ${fixable} ללא סטופ מסיבה אחרת.` : "") + `</span><span>` +
+      tiny.map(p => `<button class="small" onclick="closePos('${p.symbol}', event)">סגור ${p.symbol} ` +
+                    `($${(p.qty * p.current_price).toFixed(0)})</button>`).join(" ") +
+      (fixable > 0 ? ` <button class="small" onclick="protectNow(event)">הגן על השאר</button>` : "") +
+      `</span>`;
+  } else if (s.unprotected > 0) {
     bar.className = "guard warn";
     bar.innerHTML = `<span>⚠ ${s.unprotected} פוזיציות ללא סטופ אצל הברוקר — אם המחשב נכבה או הבוט לא רץ, אין הגנה.</span>` +
       `<button class="small" onclick="protectNow(event)">הגן עכשיו</button>`;
@@ -652,6 +841,18 @@ function renderGuardBar(s) {
     bar.innerHTML = `<span>🛡 כל הפוזיציות מוגנות בסטופ אמיתי אצל הברוקר (פעיל גם כשהבוט כבוי).</span>` +
       `<button class="small" onclick="protectNow(event)">רענן הגנה</button>`;
   }
+}
+
+async function closePos(symbol, ev) {
+  ev.stopPropagation();                       // the row itself opens the chart
+  if (!confirm(`למכור עכשיו את כל הפוזיציה ב-${symbol}?`)) return;
+  const btn = ev.target;
+  btn.disabled = true; btn.textContent = "מוכר...";
+  try {
+    const r = await (await fetch(`/api/close/${symbol}`, {method: "POST"})).json();
+    if (!r.ok) alert("שגיאה: " + (r.error || ""));
+  } catch (e) { alert("השרת לא זמין"); }
+  finally { refresh(); }
 }
 
 async function protectNow(ev) {
@@ -713,14 +914,18 @@ async function copyConnect(btn) {
 /* ---------- market countdown ---------- */
 let nextEvent = null, serverSkew = 0;
 
-function hebDays(n) { return n === 1 ? "יום" : n === 2 ? "יומיים" : `${n} ימים`; }
+// spelled out, never abbreviated: a geresh is a bidi-neutral character and ends up
+// floating at the left edge of the line, where it reads as a stray quote mark
+function hebDays(n)  { return n === 1 ? "יום"  : n === 2 ? "יומיים"  : `${n} ימים`; }
+function hebHours(n) { return n === 1 ? "שעה"  : n === 2 ? "שעתיים" : `${n} שעות`; }
+function hebMins(n)  { return n === 1 ? "דקה"  : n === 2 ? "שתי דקות" : `${n} דקות`; }
 
 function countdownText(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const d = Math.floor(total / 86400), h = Math.floor(total % 86400 / 3600);
   const m = Math.floor(total % 3600 / 60), sec = total % 60;
   const pad = n => String(n).padStart(2, "0");
-  if (d) return `${hebDays(d)} ${h} שע'`;
+  if (d) return `<span class="dur">${hebDays(d)} ו-${hebHours(h)}</span>`;
   return `${pad(h)}:${pad(m)}:${pad(sec)}`;
 }
 
@@ -746,12 +951,161 @@ document.getElementById("viewTabs").addEventListener("click", e => {
   document.getElementById("viewTrade").hidden = view !== "trade";
   document.getElementById("viewPerf").hidden = view !== "perf";
   document.getElementById("viewSim").hidden = view !== "sim";
+  document.getElementById("viewResearch").hidden = view !== "research";
   if (view === "perf") loadPerformance();
   if (view === "sim") simDefaults();
+  if (view === "research") loadResearch();
 });
+
+/* ---------- daily research ---------- */
+const VERDICTS = {
+  gave_it_back:   {txt: "החזרנו את הרווח", cls: "neg"},
+  exited_early:   {txt: "יצאנו מוקדם",   cls: "neg"},
+  stop_too_tight: {txt: "סטופ צר מדי",   cls: "neg"},
+  good_exit:      {txt: "יציאה טובה",    cls: "pos"},
+  early_entry:    {txt: "כניסה מוקדמת",  cls: ""},
+  clean:          {txt: "תקין",          cls: ""},
+  partial:        {txt: "ממתין לסגירה",  cls: ""},
+};
+
+function signed(v, digits = 2) {
+  if (v == null) return "—";
+  const cls = v >= 0 ? "pos" : "neg";
+  return `<span class="${cls}">${v >= 0 ? "+" : ""}${v.toFixed(digits)}%</span>`;
+}
+
+async function loadResearch() {
+  try {
+    const d = await (await fetch("/api/research")).json();
+    if (!d.ok) { document.getElementById("resStatus").textContent = "שגיאה: " + (d.error || ""); return; }
+
+    document.getElementById("resStatus").textContent = d.pending
+      ? `${d.pending} עסקאות עדיין לא נחקרו — לחץ "חקור עסקאות חדשות".`
+      : "כל העסקאות הסגורות נחקרו. החקירה רצה גם לבד כל יום ב-23:20.";
+
+    // conclusions: the sample gate is the headline, not a footnote
+    const c = d.conclusions, st = c.status;
+    let html = "";
+    for (const a of (st.alerts || []))
+      html += `<div class="guard warn" style="margin-bottom:12px;display:block">
+        <b>⚠ ${a.title}</b><div style="margin-top:6px;font-weight:400">${a.detail}</div></div>`;
+    if (!st.ready) {
+      html += `<div class="guard" style="display:block;background:#0d1117;border:1px solid var(--border);color:var(--dim)">
+        <b style="color:var(--text)">עוד מוקדם להסיק מסקנות</b>
+        <div style="margin-top:6px">${st.why}</div>
+        <div style="margin-top:8px">חסרות עוד <b style="color:var(--text)">${st.need_trades}</b> עסקאות
+          ו-<b style="color:var(--text)">${st.need_days}</b> ימי מסחר.</div></div>`;
+    } else {
+      html += c.items.map(i => `<div class="guard ok" style="display:block;margin-bottom:10px">
+        <b>${i.title}</b>
+        <div style="margin-top:6px;font-weight:400">${i.evidence}</div>
+        ${i.change ? `<div style="margin-top:8px;direction:ltr;text-align:left;font-family:monospace;
+          background:#0d1117;padding:7px 9px;border-radius:6px">${i.change}</div>
+          <div style="margin-top:7px;font-weight:400;font-size:12px">
+          כדי להחיל — שנה את השורה הזאת ב-config.py והרץ ./restart.sh</div>` : ""}
+      </div>`).join("");
+    }
+    document.getElementById("resConclusions").innerHTML = html;
+
+    document.getElementById("resSweep").innerHTML = d.sweep.length ? d.sweep.map(r => {
+      const p = r.params ? Object.entries(r.params).map(([k, v]) => `${k.replace("atr_", "")}=${v}`).join(" ") : "—";
+      return `<tr${r.is_current ? ' style="background:#12325e33"' : ""}>
+        <td><b>${r.label}</b>${r.is_current ? ' <span class="badge on">נוכחי</span>' : ""}</td>
+        <td class="num ${r.total_usd >= 0 ? "pos" : "neg"}"><b>${fmtSigned(r.total_usd)}</b></td>
+        <td class="num">${signed(r.avg_pct, 3)}</td>
+        <td class="num">${r.win_rate}%</td>
+        <td class="num">${r.trades}</td>
+        <td class="num" style="font-size:11px;color:var(--dim)">${p}</td></tr>`;
+    }).join("") : `<tr><td colspan="6" style="color:var(--dim)">אין עדיין עסקאות שנחקרו</td></tr>`;
+
+    document.getElementById("resTrades").innerHTML = d.reviews.length ? d.reviews.map(r => {
+      const v = VERDICTS[r.verdict] || {txt: r.verdict, cls: ""};
+      const off = r.deviation_pct != null && Math.abs(r.deviation_pct) >= 0.3;
+      return `<tr>
+        <td><b>${r.symbol}</b>${r.data_ok ? "" : ' <span class="badge part" title="חסרים נרות מסוף היום">חלקי</span>'}</td>
+        <td class="num">${isoToDMY(r.trade_day)}</td>
+        <td class="num"><b>${signed(r.actual_pct)}</b></td>
+        <td class="num">${signed(r.mfe_pct)}</td>
+        <td class="num">${r.capture_pct == null ? "—" : r.capture_pct.toFixed(0) + "%"}</td>
+        <td class="num">${signed(r.peak_after_exit_pct)} / ${signed(r.drop_after_exit_pct)}</td>
+        <td class="num">${signed(r.eod_pct)}</td>
+        <td class="num">${signed(r.by_book_pct)}${off ? ' <span class="badge off">חריגה</span>' : ""}</td>
+        <td class="st"><span class="${v.cls}">${v.txt}</span><span class="sub">${r.note || ""}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="9" style="color:var(--dim)">אין עדיין נתיחות — לחץ "חקור עסקאות חדשות"</td></tr>`;
+  } catch (e) {
+    document.getElementById("resStatus").textContent = "השרת לא זמין";
+  }
+}
+
+async function runResearch(force) {
+  const btn = document.getElementById("resRunBtn");
+  btn.disabled = true;
+  document.getElementById("resStatus").textContent = "חוקר... (מוריד נרות דקה, יכול לקחת עד דקה)";
+  try {
+    const r = await (await fetch("/api/research/run", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({force: !!force}),
+    })).json();
+    if (!r.ok) document.getElementById("resStatus").textContent = "שגיאה: " + (r.error || "");
+    else await loadResearch();
+  } catch (e) {
+    document.getElementById("resStatus").textContent = "השרת לא זמין";
+  } finally { btn.disabled = false; }
+}
+
+/* ---------- today's action history ---------- */
+let lastHistFetch = 0;
+const REASON_HE = {
+  "stop loss": "ירד ל-Stop", "end of day": "סוף יום", "broker stop": "Stop אצל הברוקר",
+  "stale (previous day)": "ניקוי בוקר", "cash recovery": "פינוי מזומן", "eod": "סוף יום",
+};
+
+async function loadHistory() {
+  if (Date.now() - lastHistFetch < 30000) return;
+  lastHistFetch = Date.now();
+  try {
+    const d = await (await fetch("/api/trades?period=today")).json();
+    if (!d.ok) return;
+    const body = document.getElementById("historyBody");
+    if (!d.trades.length) {
+      body.innerHTML = `<tr><td colspan="8" style="color:var(--dim)">אין עסקאות סגורות היום</td></tr>`;
+      return;
+    }
+    body.innerHTML = d.trades.map(t => {
+      const win = t.pnl_usd >= 0;
+      const cls = win ? "pos" : "neg";
+      const buyT = t.entry_time ? t.entry_time.slice(11, 16) : "—";
+      const mins = t.held_seconds != null
+        ? `<span class="dur">${hebMins(Math.round(t.held_seconds / 60))}</span>` : "—";
+      return `<tr class="${win ? "up" : "down"}">
+        <td><b>${t.symbol}</b></td>
+        <td class="num">${buyT}</td><td class="num">${fmt(t.entry_price)}</td>
+        <td class="num">${t.closed ? t.closed.label.replace("היום ", "") : "—"}</td>
+        <td class="num">${fmt(t.exit_price)}</td>
+        <td>${mins}</td>
+        <td class="${cls}"><b>${fmtSigned(t.pnl_usd)}</b> (${pct(t.pnl_pct)})</td>
+        <td>${REASON_HE[t.reason] || t.reason}</td></tr>`;
+    }).join("");
+  } catch (e) { /* server briefly unavailable */ }
+}
 
 /* ---------- opening intelligence (display only) ---------- */
 let lastIntelFetch = 0;
+
+// The server's `hot` flag is one boolean over two unrelated causes (volume OR
+// gap), so a stock that jumped 3% on half its normal volume looked identical to
+// one trading at 3.7x. Say which it is, in words.
+function intelStatus(r) {
+  const rv = r.rvol, gap = Math.abs(r.gap_pct ?? 0);
+  if (rv != null && rv >= 1.5)
+    return { txt: "🔥 במשחק", sub: `נסחרת פי ${rv.toFixed(1)} מהרגיל — יש התעניינות אמיתית` };
+  if (gap >= 2 && rv != null && rv < 1)
+    return { txt: "פער בלי נפח", sub: "המחיר קפץ אבל כמעט אף אחד לא סוחר" };
+  if (gap >= 2)
+    return { txt: "פער פתיחה", sub: "נפתחה רחוק מאתמול, בנפח רגיל" };
+  return { txt: "רגיל", sub: "שום דבר חריג הבוקר" };
+}
 
 async function loadIntel() {
   if (Date.now() - lastIntelFetch < 60000) return;      // once a minute is plenty
@@ -762,16 +1116,18 @@ async function loadIntel() {
     if (!d.ready || !d.rows.length) { card.hidden = true; return; }
     card.hidden = false;
     document.getElementById("intelNote").textContent =
-      (d.quality === "sip" ? "נתונים מלאים (כל השוק)" : "נתונים ראשוניים — מתעדכנים לנתונים מלאים ב-16:52") +
-      " · מידע בלבד, לא פילטר מסחר: הבדיקה שלנו הראתה שסינון אוטומטי לפי זה מזיק במניות גדולות";
+      (d.quality === "sip" ? "המספרים סופיים — כל המסחר בשוק נספר."
+                           : "מספרים ראשוניים (רק חלק מהמסחר נספר) — מתעדכנים למלאים ב-16:52 שעון ישראל.") +
+      " הטבלה מתרעננת פעם בדקה.";
     document.getElementById("intelBody").innerHTML = d.rows.map(r => {
       const gap = r.gap_pct == null ? "—" : `${r.gap_pct >= 0 ? "+" : ""}${r.gap_pct}%`;
       const gapCls = (r.gap_pct || 0) >= 0 ? "pos" : "neg";
       const rvol = r.rvol == null ? "—" : r.rvol.toFixed(1) + "x";
       const pm = r.pm_vol == null ? "—" : Number(r.pm_vol).toLocaleString("en-US");
+      const st = intelStatus(r);
       return `<tr><td><b>${r.symbol}</b></td><td class="${gapCls} num">${gap}</td>
         <td class="num">${rvol}</td><td class="num">${pm}</td>
-        <td>${r.hot ? "🔥 במשחק" : "רגיל"}</td></tr>`;
+        <td class="st">${st.txt}<span class="sub">${st.sub}</span></td></tr>`;
     }).join("");
   } catch (e) { /* server briefly unavailable */ }
 }
@@ -980,7 +1336,7 @@ function drawEmpty(el, msg) { el.innerHTML = `<div class="empty">${msg}</div>`; 
 
 // equity over time
 function drawEquity(el, points) {
-  if (!points || points.length < 2) { drawEmpty(el, "אין מספיק נקודות בטווח הזה"); return; }
+  if (!points || points.length < 2) { drawEmpty(el, "אין עסקאות סגורות בטווח הזה"); return; }
   const f = chartFrame(el, 260);
   const plotH = f.H - f.padT - f.axisH, plotW = f.W - f.padL - f.padR;
   const y1 = f.padT + plotH, n = points.length;
@@ -1086,12 +1442,12 @@ async function loadPerformance() {
     const e = p.equity_summary;
 
     document.getElementById("eqStats").innerHTML = e ? [
-      `<div class="stat big"><div class="v num ${e.change >= 0 ? "pos" : "neg"}">${fmtSigned(e.change)}</div><div class="k">שינוי בתיק (${pct(e.change_pct)})</div></div>`,
-      `<div class="stat"><div class="v num">${fmt(e.now)}</div><div class="k">שווי עכשיו</div></div>`,
+      `<div class="stat big"><div class="v num ${e.change >= 0 ? "pos" : "neg"}">${fmtSigned(e.change)}</div><div class="k">רווח/הפסד ממומש (${pct(e.change_pct)})</div></div>`,
+      `<div class="stat"><div class="v num">${fmt(e.now)}</div><div class="k">שווי ממומש עכשיו</div></div>`,
       `<div class="stat"><div class="v num">${fmt(e.start)}</div><div class="k">בתחילת התקופה · ${e.from.label}</div></div>`,
-      `<div class="stat"><div class="v num">${fmt(e.peak)}</div><div class="k">שיא</div></div>`,
+      `<div class="stat"><div class="v num">${fmt(e.peak)}</div><div class="k">שיא ממומש</div></div>`,
       `<div class="stat"><div class="v num neg">${e.max_drawdown_pct.toFixed(2)}%</div><div class="k">ירידה מקסימלית מהשיא</div></div>`,
-    ].join("") : `<span style="color:var(--dim);font-size:13px">אין נתוני שווי תיק לתקופה הזו</span>`;
+    ].join("") : `<span style="color:var(--dim);font-size:13px">אין עסקאות סגורות בטווח הזה</span>`;
 
     drawEquity(document.getElementById("eqChart"), p.equity);
     drawDaily(document.getElementById("dayChart"), p.breakdown.by_day);
@@ -1129,7 +1485,7 @@ async function loadTrades() {
       `<div class="stat"><div class="v num">${pfTxt}</div><div class="k">Profit Factor</div></div>`,
       `<div class="stat"><div class="v num pos">${fmtSigned(st.avg_win)}</div><div class="k">רווח ממוצע</div></div>`,
       `<div class="stat"><div class="v num neg">${fmtSigned(st.avg_loss)}</div><div class="k">הפסד ממוצע</div></div>`,
-      `<div class="stat"><div class="v num">${st.avg_hold_min.toFixed(0)} דק'</div><div class="k">משך ממוצע</div></div>`,
+      `<div class="stat"><div class="v num"><span class="dur">${hebMins(Math.round(st.avg_hold_min))}</span></div><div class="k">משך ממוצע</div></div>`,
     ].join("") : `<span style="color:var(--dim);font-size:13px">אין עסקאות סגורות ${PERIOD_NAME[period]} — הטבלה תתמלא אחרי הסגירה הראשונה.</span>`;
 
     const rows = j.trades || [];
@@ -1189,12 +1545,14 @@ async function loadChart(sym) {
   } catch (e) { chartError("השרת לא זמין כרגע"); }
 }
 
+// returns HTML: the RTL island keeps "שעה ו-29 דקות" readable inside LTR .num cells
 function humanDuration(ms) {
   const m = Math.max(0, Math.round(ms / 60000));
   const days = Math.floor(m / 1440), hrs = Math.floor((m % 1440) / 60), mins = m % 60;
-  if (days) return `${hebDays(days)} ${hrs} שע'`;
-  if (hrs) return `${hrs} שע' ${mins} דק'`;
-  return `${mins} דק'`;
+  const txt = days ? (hrs ? `${hebDays(days)} ו-${hebHours(hrs)}` : hebDays(days))
+            : hrs ? (mins ? `${hebHours(hrs)} ו-${hebMins(mins)}` : hebHours(hrs))
+                  : hebMins(mins);
+  return `<span class="dur">${txt}</span>`;
 }
 
 function pct(v) { return (v >= 0 ? "+" : "") + v.toFixed(2) + "%"; }
@@ -1300,10 +1658,12 @@ function renderChart() {
 
   // entry price line
   svg.push(`<line x1="${padL}" y1="${Y(entry).toFixed(1)}" x2="${padL + plotW}" y2="${Y(entry).toFixed(1)}" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="6 4"/>`);
-  svg.push(`<text x="${padL + 4}" y="${(Y(entry) - 6).toFixed(1)}" fill="#8b949e" font-size="11">entry $${entry.toFixed(2)}</text>`);
 
-  // stop level over time: a staircase when the trail moved it, else a flat line
-  const hist = (d.stop_history || []).filter(h => h[0] >= bars[0].ms);
+  // stop level over time: anchored at the ENTRY moment, stepping up with the trail
+  const entryMs = d.entry_ms || (sinceIdx > 0 ? bars[sinceIdx].ms : bars[0].ms);
+  let hist = (d.stop_history || []).slice().sort((a, b) => a[0] - b[0]);
+  if (d.stop != null && !hist.length) hist = [[entryMs, d.stop]];
+  if (hist.length && hist[0][0] > entryMs) hist.unshift([entryMs, hist[0][1]]);
   if (hist.length) {
     const parts = [];
     let prevY = null;
@@ -1316,12 +1676,16 @@ function renderChart() {
       prevY = y;
     });
     parts.push(`L${X(n - 1).toFixed(1)},${prevY.toFixed(1)}`);
-    svg.push(`<path d="${parts.join(" ")}" fill="none" stroke="#da3633" stroke-width="1.5" stroke-dasharray="6 4"/>`);
-  } else if (d.stop != null) {
-    svg.push(`<line x1="${padL}" y1="${Y(d.stop).toFixed(1)}" x2="${padL + plotW}" y2="${Y(d.stop).toFixed(1)}" stroke="#da3633" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+    svg.push(`<path d="${parts.join(" ")}" fill="none" stroke="#da3633" stroke-width="1.8" stroke-dasharray="6 4"/>`);
   }
-  if (d.stop != null) {
-    svg.push(`<text x="${padL + 4}" y="${(Y(d.stop) + 14).toFixed(1)}" fill="#f87171" font-size="11">stop $${d.stop.toFixed(2)}</text>`);
+
+  // labels with a dark halo, auto-separated so they can never overlap
+  const halo = `stroke="#0d1117" stroke-width="4" paint-order="stroke" font-weight="600"`;
+  const yE = Y(entry), yS = d.stop != null ? Y(d.stop) : null;
+  const stopIsHigher = yS != null && yS < yE;      // trail climbed above the entry
+  svg.push(`<text x="${padL + 4}" y="${(stopIsHigher ? yE + 15 : yE - 7).toFixed(1)}" fill="#c9d1d9" font-size="11" ${halo}>entry $${entry.toFixed(2)}</text>`);
+  if (yS != null) {
+    svg.push(`<text x="${padL + 4}" y="${(stopIsHigher ? yS - 7 : yS + 15).toFixed(1)}" fill="#f87171" font-size="11" ${halo}>stop $${d.stop.toFixed(2)}</text>`);
   }
 
   // the entry moment
