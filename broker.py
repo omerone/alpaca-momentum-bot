@@ -139,6 +139,72 @@ class AlpacaBroker:
             logger.error("SELL failed for %s: %s", symbol, e)
             return None
 
+    def get_fill_price(self, order_id: str, retries: int = 6, wait: float = 0.5) -> float | None:
+        """Actual average fill price of an order. Market orders on paper fill
+        within a second — poll briefly. None if not (yet) filled."""
+        import time as _time
+        for _ in range(retries):
+            try:
+                o = self.trading.get_order_by_id(order_id)
+                if o.filled_avg_price is not None and float(o.filled_qty or 0) > 0:
+                    return float(o.filled_avg_price)
+            except Exception as e:
+                logger.warning("Fill lookup failed for %s: %s", order_id, e)
+                return None
+            _time.sleep(wait)
+        return None
+
+    def find_exit_fill(self, symbol: str, min_qty: float = 0.0) -> dict | None:
+        """The most recent filled SELL for a symbol: {qty, price, at}.
+
+        Needed to journal an exit that happened while the bot was down — a
+        parked stop order that fired. Without it the trade is lost to the
+        record, and every statistic built on the journal is quietly wrong.
+        """
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=100, symbols=[symbol])
+            orders = self.trading.get_orders(req)
+        except Exception as e:
+            logger.warning("Could not look up exit fill for %s: %s", symbol, e)
+            return None
+
+        best = None
+        for o in orders:
+            if str(getattr(o.side, "value", o.side)).lower() != "sell":
+                continue
+            if not getattr(o, "filled_at", None) or o.filled_avg_price is None:
+                continue
+            qty = float(o.filled_qty or 0)
+            if qty < min_qty - 1e-6:
+                continue
+            if best is None or o.filled_at > best["at"]:
+                best = {"qty": qty, "price": float(o.filled_avg_price), "at": o.filled_at}
+        return best
+
+    def wait_until_order_done(self, order_id: str, retries: int = 10, wait: float = 0.4) -> bool:
+        """Block until an order leaves Alpaca's open book.
+
+        A filled order is not immediately *closed* — fractional orders linger in
+        a settling state, and while they do, Alpaca rejects any opposite-side
+        order on the symbol as a "potential wash trade" (code 40310000). That is
+        what left fresh positions without a broker stop for ~35 seconds, until
+        the next monitor pass retried. Waiting here closes that window.
+        """
+        import time as _time
+        DONE = {"filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"}
+        for _ in range(retries):
+            try:
+                status = str(getattr(self.trading.get_order_by_id(order_id), "status", "")).lower()
+            except Exception as e:
+                logger.warning("Order status lookup failed for %s: %s", order_id, e)
+                return False
+            if any(d in status for d in DONE):
+                return True
+            _time.sleep(wait)
+        logger.warning("Order %s still open after %.1fs — placing the stop anyway",
+                       order_id, retries * wait)
+        return False
+
     # ---- protective stop orders parked at the broker -------------------
     #
     # The in-memory trailing stop only works while the bot is running. These

@@ -5,6 +5,7 @@ Connects to Alpaca Paper Trading for demo execution.
 
 import logging
 import signal
+import socket
 import sys
 import time
 from datetime import datetime
@@ -34,6 +35,27 @@ def handle_shutdown(signum, frame):
     running = False
 
 
+def _is_network_error(exc: BaseException) -> bool:
+    """Is this a connectivity problem rather than a bug?
+
+    Walks the __cause__/__context__ chain: the alpaca SDK wraps a socket error
+    in requests' ConnectionError, and only the innermost frame names it.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, (socket.gaierror, socket.timeout, ConnectionError, TimeoutError)):
+            return True
+        if type(exc).__name__ in {
+            "ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
+            "NewConnectionError", "NameResolutionError", "MaxRetryError",
+            "ProtocolError", "RemoteDisconnected", "SSLError", "ChunkedEncodingError",
+        }:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 class MomentumBot:
     def __init__(self):
         self.cfg = config
@@ -45,6 +67,8 @@ class MomentumBot:
         self.journal = TradeJournal(self.cfg.trade_log_file, account=self.broker.account_number)
         self.atrs: dict[str, float] = {}
         self._atr_date = None
+        self.earnings_blocked: dict[str, list[str]] = {}
+        self._earnings_date = None
         self.active = True          # external stop switch (web dashboard)
         self._last_stop_sent: dict[str, float | None] = {}
         self.stops.load()           # keep trailed stops across restarts
@@ -62,6 +86,16 @@ class MomentumBot:
             if atrs:
                 self.atrs = atrs
                 self._atr_date = today
+
+    def _refresh_earnings(self):
+        """Reload earnings-reaction days once per day (disk-cached)."""
+        if not self.cfg.earnings_day_veto:
+            return
+        today = datetime.now(ET).date()
+        if self._earnings_date != today:
+            from earnings_guard import load_blocked_days
+            self.earnings_blocked = load_blocked_days(list(self.cfg.scan_universe))
+            self._earnings_date = today
 
     @staticmethod
     def _parse_et(hhmm: str):
@@ -136,13 +170,63 @@ class MomentumBot:
                 self.stops.open_position(symbol, pos["entry_price"], pos["qty"])
                 logger.info("Synced existing position: %s", symbol)
             elif abs(saved.quantity - pos["qty"]) > 1e-6:
-                saved.quantity = pos["qty"]      # partial fill / partial stop fill
+                sold = saved.quantity - pos["qty"]
+                # Shrunk while we were down: a parked stop order fired and sold
+                # the whole-share part. Silently adjusting the quantity used to
+                # erase that exit from the journal — on 2026-08-17 it lost
+                # $193.60 of realized P/L across QCOM and INTC, which is exactly
+                # the data the research engine reasons from.
+                if sold > 1e-6 and not self.broker.get_open_stops().get(symbol):
+                    self._journal_missed_exit(symbol, saved, sold)
+                saved.quantity = pos["qty"]
                 self.stops.save()
                 logger.info("Adjusted %s quantity to %.4f", symbol, pos["qty"])
 
+    def _journal_missed_exit(self, symbol: str, saved, sold: float):
+        """Record an exit that a broker stop executed while the bot was off."""
+        fill = self.broker.find_exit_fill(symbol, min_qty=sold * 0.9)
+        exit_price = fill["price"] if fill else saved.stop_loss
+        self.journal.record(
+            symbol, sold, saved.entry_price, exit_price,
+            "broker stop (בזמן שהבוט לא רץ)", saved.entry_time,
+            stop_price=saved.stop_loss,
+            initial_stop=saved.stop_history[0][1] if saved.stop_history else None,
+        )
+        logger.warning(
+            "%s: %.4f מניות נמכרו בסטופ אצל הברוקר בזמן שהבוט לא רץ — נרשם ביומן @ $%.2f (%+.2f$)",
+            symbol, sold, exit_price, (exit_price - saved.entry_price) * sold,
+        )
+
     def _reconcile(self):
         """Catch positions closed behind our back (a broker stop that fired)."""
-        broker_symbols = {p["symbol"] for p in self.broker.get_open_positions()}
+        broker_positions = {p["symbol"]: p for p in self.broker.get_open_positions()}
+        broker_symbols = set(broker_positions)
+
+        # a broker stop sells only the whole-share part — if it fired, sell the
+        # fractional crumb left behind and record the full trade
+        for symbol in list(self.stops.active_symbols()):
+            bp = broker_positions.get(symbol)
+            pos = self.stops.get_position(symbol)
+            if not bp or not pos or not pos.broker_stop_id:
+                continue
+            if bp["qty"] < 1 and pos.quantity >= 1 and not self.broker.get_open_stops().get(symbol):
+                logger.warning(
+                    "%s broker stop fired — selling %.4f remainder and recording the trade",
+                    symbol, bp["qty"],
+                )
+                res = self.broker.sell(symbol, bp["qty"])
+                exit_price = (self.broker.get_fill_price(res["id"]) if res else None) or pos.stop_loss
+                closed = self.stops.close_position(symbol)
+                self._last_stop_sent.pop(symbol, None)
+                if closed:
+                    self.journal.record(
+                        symbol, closed.quantity, closed.entry_price, exit_price,
+                        "broker stop", closed.entry_time,
+                        stop_price=closed.stop_loss,
+                        initial_stop=closed.stop_history[0][1] if closed.stop_history else None,
+                    )
+                broker_symbols.discard(symbol)
+
         for symbol in list(self.stops.active_symbols()):
             if symbol in broker_symbols:
                 continue
@@ -208,6 +292,35 @@ class MomentumBot:
         pos = self.stops.get_position(symbol)
         if pos:
             pos.broker_stop_id = None
+
+    # ---- daily research -------------------------------------------------
+
+    def research_if_due(self):
+        """Once a day, after the close, study today's trades.
+
+        Deliberately late (16:20 ET default): the free data plan embargoes the
+        last ~15 minutes of SIP, and reviewing a session whose tail is missing
+        measures the data hole instead of the trade.
+        """
+        if not self.cfg.research_enabled:
+            return
+        now = datetime.now(ET)
+        if now.weekday() >= 5:
+            return
+        h, m = self._parse_et(self.cfg.research_run_et)
+        if (now.hour, now.minute) < (h, m):
+            return
+        if getattr(self, "_researched_day", None) == now.date():
+            return
+        self._researched_day = now.date()      # set first: a crash must not loop
+
+        try:
+            import postmortem
+            result = postmortem.run(self.cfg.trade_log_file, self.journal.recent(limit=5000))
+            if result.get("reviewed"):
+                logger.info("חקירה יומית: נותחו %d עסקאות", result["reviewed"])
+        except Exception as e:
+            logger.warning("Daily research failed: %s", e)
 
     def _print_status(self):
         account = self.broker.get_account()
@@ -276,6 +389,12 @@ class MomentumBot:
             self._place_broker_stop(symbol)     # sell failed: re-arm the safety net
             return False
 
+        # journal the ACTUAL fill, not the quote that triggered the decision —
+        # a transient bad quote once recorded -$160 on a trade that filled +$67
+        fill = self.broker.get_fill_price(result["id"])
+        if fill is not None:
+            price = fill
+
         closed = self.stops.close_position(symbol)
         if closed:
             pnl_pct = ((price - closed.entry_price) / closed.entry_price) * 100
@@ -320,11 +439,87 @@ class MomentumBot:
         self._close_position(symbol, target["qty"], price, "cash recovery")
         logger.info("Freed ~$%.2f from selling %s", freed, symbol)
 
+    def _handle_weak_tape(self):
+        """SPY below its VWAP: the regime that favors shorts (sim 13/08:
+        COMBO positive in all 5 periods). OBSERVER stage — every short the bot
+        would open is logged to data/short_observations.jsonl, nothing is
+        executed, until live observation confirms the simulation."""
+        candidates = self.scanner.scan_shorts()
+        if not candidates:
+            return
+
+        from earnings_guard import is_blocked_today
+        now = datetime.now(ET)
+        throttle = getattr(self, "_short_obs_last", {})
+        self._short_obs_last = throttle
+
+        for c in candidates[: self.cfg.max_positions]:
+            if self.stops.has_position(c.symbol):
+                continue
+            last = throttle.get(c.symbol)
+            if last and (now - last).total_seconds() < 300:
+                continue                      # one observation per symbol / 5 min
+            if self.cfg.earnings_day_veto and is_blocked_today(c.symbol, self.earnings_blocked):
+                continue
+            atr = self.atrs.get(c.symbol)
+            if not atr or atr <= 0:
+                continue
+            prev_close = getattr(self.scanner, "prev_closes", {}).get(c.symbol)
+            day_chg = ((c.price - prev_close) / prev_close * 100) if prev_close else 0.0
+            if day_chg <= self.cfg.short_ssr_guard_pct:
+                continue                      # crashed already — SSR / squeeze zone
+
+            stop_d = self.cfg.atr_stop_mult * atr
+            try:
+                equity = self.broker.get_account()["equity"]
+            except Exception:
+                equity = 100_000.0
+            qty = int(min((equity * self.cfg.short_risk_pct / 100) / stop_d,
+                          self.cfg.max_position_value_usd / c.price))
+            if qty < 1:
+                continue
+
+            throttle[c.symbol] = now
+            obs = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "symbol": c.symbol, "price": c.price,
+                "stop": round(c.price + stop_d, 2), "qty": qty,
+                "tick_pct": c.tick_change_pct, "vs_vwap_pct": c.price_vs_vwap_pct,
+                "vol_ratio": c.volume_ratio, "day_chg_pct": round(day_chg, 2),
+            }
+            logger.info(
+                "OBSERVER: would SHORT %s x%d @ $%.2f (stop $%.2f, tick %.3f%%, vwap %.2f%%, vol %.1fx)",
+                c.symbol, qty, c.price, obs["stop"], c.tick_change_pct,
+                c.price_vs_vwap_pct, c.volume_ratio,
+            )
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                p = _Path("data/short_observations.jsonl")
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with p.open("a") as f:
+                    f.write(_json.dumps(obs) + "\n")
+            except Exception as e:
+                logger.warning("Could not record short observation: %s", e)
+
+            if not self.cfg.shorts_observe_only:
+                logger.warning("Short execution requested but not implemented yet — staying observer-only")
+
     def scan_and_enter(self):
         """Scan for momentum stocks and enter new positions."""
         if not self._in_entry_window():
             logger.debug("Outside entry window (%s), skipping scan",
                          et_range_to_local(self.cfg.entry_start_et, self.cfg.entry_end_et))
+            return
+
+        # Market gate routes DIRECTION: SPY above its VWAP -> longs;
+        # below -> short signals (observer stage for now).
+        # None (no data) fails OPEN for longs — a hiccup must not stop the bot.
+        if self.cfg.spy_gate_enabled and self.scanner.spy_above_vwap() is False:
+            if self.cfg.shorts_enabled:
+                self._handle_weak_tape()
+            else:
+                logger.debug("SPY below its VWAP — market gate closed, no new longs")
             return
 
         if len(self.stops.active_symbols()) >= self.cfg.max_positions:
@@ -342,6 +537,12 @@ class MomentumBot:
 
             if self.stops.has_position(candidate.symbol):
                 continue
+
+            if self.cfg.earnings_day_veto:
+                from earnings_guard import is_blocked_today
+                if is_blocked_today(candidate.symbol, self.earnings_blocked):
+                    logger.debug("%s blocked today (earnings reaction day)", candidate.symbol)
+                    continue
 
             account = self.broker.get_account()
             available = max(0.0, account["cash"] - self.cfg.cash_reserve_usd)
@@ -380,9 +581,27 @@ class MomentumBot:
                 logger.warning("Blocked %s: cost $%.2f exceeds available cash $%.2f", candidate.symbol, cost, available)
                 continue
 
+            # Scraps of leftover cash buy a fraction of a share, which Alpaca
+            # cannot protect with a stop order. Skip instead of opening one.
+            if cost < self.cfg.min_position_usd:
+                logger.info(
+                    "Skipping %s: $%.2f is below the $%.0f minimum position "
+                    "(too small to protect with a broker stop)",
+                    candidate.symbol, cost, self.cfg.min_position_usd,
+                )
+                if available < self.cfg.min_position_usd:
+                    break        # cash is the limit — no later candidate does better
+                continue
+
             result = self.broker.buy(candidate.symbol, qty)
             if result:
+                fill = self.broker.get_fill_price(result["id"])
+                if fill is not None:
+                    price = fill            # stops anchor on the real entry, not the signal quote
                 self.stops.open_position(candidate.symbol, price, qty, stop_distance, trail_distance)
+                # the buy must be off Alpaca's open book first, or the stop is
+                # rejected as a wash trade and the position sits unprotected
+                self.broker.wait_until_order_done(result["id"])
                 self._place_broker_stop(candidate.symbol)
                 logger.info(
                     "Entered: %s tick=+%.3f%% vwap=$%.2f (+%.2f%%) vol=%.1fx @ $%.2f (cost=$%.2f, cash left~$%.2f)",
@@ -401,12 +620,40 @@ class MomentumBot:
             if price is None:
                 continue
 
+            # a new high must be seen twice before it may raise the trail —
+            # a ghost HIGH quote would tighten the broker stop into the market
+            pos = self.stops.get_position(symbol)
+            if pos and price > pos.highest_price:
+                confirm = self.scanner.get_current_price(symbol)
+                if confirm is not None:
+                    price = min(price, confirm)
+
             action = self.stops.update_price(symbol, price)
 
             if action == "stop_hit":
                 pos = self.stops.get_position(symbol)
-                if pos:
-                    self._close_position(symbol, pos.quantity, price, "stop loss")
+                if not pos:
+                    continue
+                # Zero-false-sell architecture: our quotes never liquidate.
+                # The parked broker STOP order is the executor — it reacts to
+                # the real consolidated market, not to our IEX feed. A ghost
+                # quote here therefore cannot sell anything.
+                if pos.broker_stop_id and self.broker.get_open_stops().get(symbol):
+                    logger.info(
+                        "%s at stop per our feed ($%.2f <= $%.2f) — deferring to the broker stop order",
+                        symbol, price, pos.stop_loss,
+                    )
+                    continue
+                # no live broker stop (fractional-only position or placement
+                # failed): software fallback, double-confirmed
+                confirm = self.scanner.get_current_price(symbol)
+                if confirm is not None and confirm > pos.stop_loss:
+                    logger.info(
+                        "Stop trigger for %s not confirmed (quote $%.2f -> $%.2f) — holding",
+                        symbol, price, confirm,
+                    )
+                    continue
+                self._close_position(symbol, pos.quantity, confirm or price, "stop loss")
             elif action == "stop_raised":
                 self._place_broker_stop(symbol)      # keep the safety net in step
 
@@ -420,18 +667,27 @@ class MomentumBot:
                     et_range_to_local("09:30", "16:00"))
         logger.info("=" * 50)
 
-        self._print_status()
-        self.recover_cash_if_needed()
-        self._refresh_atrs()
+        # Startup probes talk to the network too — a hiccup here must not stop
+        # the bot before it has begun.
+        try:
+            self._print_status()
+            self.recover_cash_if_needed()
+            self._refresh_atrs()
+        except Exception as e:
+            logger.error("שגיאה באתחול הבוט (ממשיך בכל זאת): %s", e)
 
         last_scan = 0
         last_report = 0
+        errors = 0                  # consecutive non-network failures
+        net_errors = 0              # consecutive connectivity failures
 
         while running and self.active:
+          try:
             now = time.time()
 
             if self._market_hours():
                 self._refresh_atrs()
+                self._refresh_earnings()
                 self.close_stale_positions()
                 self.recover_cash_if_needed()
                 self.monitor_stops()
@@ -448,12 +704,46 @@ class MomentumBot:
                 # sure nothing is left unprotected.
                 self._reconcile()
                 self._print_holdings_report()
+                self.research_if_due()
                 last_report = now
 
-            time.sleep(self.cfg.monitor_interval_seconds)
+            errors = net_errors = 0
+          except Exception as e:
+            # A dropped keep-alive connection to Alpaca used to kill this thread
+            # outright. The server stayed up, the dashboard still read "off",
+            # and the bot silently missed a whole session: it died at 01:56 on
+            # 2026-08-18 and was noticed at 17:32, an hour into the entry
+            # window. A transient network fault costs a retry, not the day.
+            # A network fault is NOT a reason to give up. On 20/08/2026 the
+            # laptop slept, DNS died for nine hours, this counter reached 20 and
+            # the bot quit on purpose — guaranteeing it was dead when the link
+            # came back. Connectivity always returns; logic errors do not fix
+            # themselves. So they are counted separately.
+            if _is_network_error(e):
+                net_errors += 1
+                if net_errors in (1, 5, 20) or net_errors % 50 == 0:
+                    logger.error("אין תקשורת (%d ניסיונות) — ממתין וממשיך לנסות: %s",
+                                 net_errors, e)
+                time.sleep(min(60, 5 * net_errors))
+            else:
+                errors += 1
+                logger.error("שגיאה בלולאת הבוט (%d ברצף) — ממשיך: %s", errors, e,
+                             exc_info=(errors == 1))
+                if errors >= self.cfg.max_consecutive_errors:
+                    logger.critical(
+                        "הבוט נעצר אחרי %d שגיאות רצופות — נדרשת בדיקה ידנית", errors)
+                    break
+                time.sleep(min(30, 3 * errors))   # back off, then try again
+
+          time.sleep(self.cfg.monitor_interval_seconds)
 
         logger.info("Bot stopped. Final report:")
-        self._print_holdings_report()
+        try:
+            self._print_holdings_report()
+        except Exception as e:
+            # this ran unguarded and produced the alarming "Exception in thread
+            # bot-loop" traceback on 20/08/2026, long after the real cause
+            logger.warning("לא ניתן להדפיס דוח סיום: %s", e)
 
 
 def main():

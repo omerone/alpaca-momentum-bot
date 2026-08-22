@@ -12,6 +12,7 @@ import logging
 import secrets
 import socket
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from main import MomentumBot
 from strategy import TrailingStopManager
 
 from timeutil import (
-    DISPLAY_TZ, ET, IL, et_range_to_local, fmt_local,
+    DISPLAY_TZ, ET, IL, et_range_to_local, et_to_local, fmt_local,
     install_log_timezone, now_local, to_local,
 )
 
@@ -256,6 +257,73 @@ def market_session() -> str:
     return "closed"
 
 
+def _in_entry_window() -> bool:
+    if not config.entry_window_enabled:
+        return True
+    now = datetime.now(ET)
+    sh, sm = (int(x) for x in config.entry_start_et.split(":"))
+    eh, em = (int(x) for x in config.entry_end_et.split(":"))
+    return (sh, sm) <= (now.hour, now.minute) < (eh, em)
+
+
+def entry_gate(positions: list, account: dict | None) -> dict:
+    """Why is the bot not buying right now?
+
+    Every reason the entry path can bail out on is invisible in the log (they
+    are all logger.debug), so the answer used to require reading the code. This
+    returns the first blocking reason, in the same order scan_and_enter checks
+    them. `state` drives the colour; `txt` is the whole explanation.
+    """
+    window = et_range_to_local(config.entry_start_et, config.entry_end_et)
+
+    if not bot_running():
+        # "off" and "fell over" look identical from the outside, and reading the
+        # wrong one costs a whole session — say which it is.
+        if crash_state["crashed_at"] and _autostart_on():
+            return {"state": "blocked",
+                    "txt": (f"⚠ הבוט קרס ב-{crash_state['crashed_at']} ({crash_state['reason']}) "
+                            "ולא רץ כרגע. לחץ על הכפתור כדי להפעיל מחדש.")}
+        return {"state": "off", "txt": "האוטומציה כבויה — לחץ על הכפתור כדי להפעיל"}
+
+    session = market_session()
+    if session != "open":
+        label = {"pre": "פרה-מרקט — הבוט לא סוחר לפני הפתיחה",
+                 "after": "אחרי סגירת המסחר",
+                 "closed": "השוק סגור"}[session]
+        return {"state": "wait", "txt": f"{label}. חלון הקנייה הוא {window}"}
+
+    if not _in_entry_window():
+        now_hm = datetime.now(IL).strftime("%H:%M")
+        early = now_hm < et_to_local(config.entry_start_et)
+        return {"state": "wait",
+                "txt": (f"חלון הקנייה ({window}) עוד לא נפתח" if early
+                        else f"חלון הקנייה ({window}) נסגר — אין כניסות חדשות היום. "
+                             "הפוזיציות הקיימות ממשיכות להתנהל עד הסגירה")}
+
+    if len(positions) >= config.max_positions:
+        return {"state": "full",
+                "txt": f"כל {config.max_positions} המקומות תפוסים — הבוט ייכנס רק אחרי שפוזיציה תיסגר"}
+
+    if account is not None:
+        available = account["cash"] - config.cash_reserve_usd
+        if available < config.min_position_usd:
+            return {"state": "full",
+                    "txt": f"נשארו ${max(0, available):,.0f} פנויים — פחות מהמינימום "
+                           f"לפוזיציה (${config.min_position_usd:,.0f})"}
+
+    # SPY gate — read the bot's 60s cache only; computing it here would add an
+    # API call to every dashboard poll.
+    if config.spy_gate_enabled and state["bot"]:
+        cached = getattr(state["bot"].scanner, "_spy_gate_cache", None)
+        if cached and cached[1] is False:
+            return {"state": "blocked",
+                    "txt": "שער השוק סגור — SPY נסחר מתחת ל-VWAP שלו, כלומר השוק הכללי חלש. "
+                           "מניה בודדת רק לעתים רחוקות מנצחת שוק יורד"}
+
+    return {"state": "hunting",
+            "txt": "סורק כל 3 שניות ומחפש מניה שעולה עם נפח חריג מעל ה-VWAP שלה"}
+
+
 def apply_focus(symbols: list[str]):
     """Set the scan universe: chosen symbols + any open broker positions
     (so existing positions keep getting price updates for their stops)."""
@@ -322,6 +390,7 @@ def status():
         payload["broker_stop_enabled"] = config.broker_stop_enabled
     except Exception as e:
         payload["error"] = str(e)
+    payload["gate"] = entry_gate(payload["positions"], payload["account"])
     return jsonify(payload)
 
 
@@ -396,20 +465,58 @@ def trades():
     })
 
 
-# dashboard period -> (journal lookback days, Alpaca portfolio-history args)
-PERF_PERIODS = {
-    "today": (0, "1D", "5Min"),
-    "week": (7, "1W", "1H"),
-    "month": (30, "1M", "1D"),
-    "all": (None, "1A", "1D"),
-}
+# dashboard period -> journal lookback in days (None = the whole journal)
+PERF_PERIODS = {"today": 0, "week": 7, "month": 30, "all": None}
+
+
+def _realized_equity_curve(broker, curve: list[dict], since: str | None) -> list[dict]:
+    """Account value counting CLOSED trades only.
+
+    Alpaca's portfolio history marks open positions to market, so an untouched
+    position drags the line up and down on its own and the chart stops being a
+    statement about the strategy. Here every step is a real exit: the line moves
+    when — and only when — a trade is closed.
+    """
+    if not curve:
+        return []
+    try:
+        cash = broker.get_account()["cash"]
+        cost_basis = sum(p["qty"] * p["entry_price"] for p in broker.get_open_positions())
+    except Exception as e:
+        logging.getLogger("server").warning("Realized equity base failed: %s", e)
+        return []
+
+    # Open positions are held at what we PAID, not at the last print, so no live
+    # price reaches this number. (equity - unrealized_pl gives the same value but
+    # jitters by a dollar or two: Alpaca samples the two at different instants.)
+    realized_now = cash + cost_basis
+    base = realized_now - curve[-1]["cum"]
+
+    if since:
+        start_ms = int(datetime.fromisoformat(since).astimezone().timestamp() * 1000)
+    else:
+        start_ms = curve[0]["ms"] - 3_600_000      # room to see the first step
+
+    def point(ms: int, value: float) -> dict:
+        return {
+            "ms": ms,
+            "equity": round(value, 2),
+            "pl": round(value - base, 2),
+            "pl_pct": round((value - base) / base * 100, 4) if base else 0.0,
+        }
+
+    points = [point(start_ms, base)]
+    points += [point(c["ms"], base + c["cum"]) for c in curve]
+    # flat tail to now: nothing has been realized since the last exit
+    points.append(point(int(datetime.now(pytz.UTC).timestamp() * 1000), realized_now))
+    return points
 
 
 @app.get("/api/performance")
 def performance():
     """Everything needed to answer 'when were we making money, and when not'."""
     period = request.args.get("period", "month")
-    days, hist_period, hist_tf = PERF_PERIODS.get(period, PERF_PERIODS["month"])
+    days = PERF_PERIODS.get(period, PERF_PERIODS["month"])
 
     since = None
     if days is not None:
@@ -417,15 +524,16 @@ def performance():
         since = (start - timedelta(days=days)).isoformat()
 
     broker = state["bot"].broker if state["bot"] else _account_broker
-    equity = broker.get_portfolio_history(hist_period, hist_tf)
+    # entry hours in Israel time, matching every other timestamp on the page
+    breakdown = _journal.breakdown(since=since, tz=DISPLAY_TZ)
+    equity = _realized_equity_curve(broker, breakdown["curve"], since)
 
     payload = {
         "ok": True,
         "period": period,
         "equity": equity,
         "stats": _journal.stats(since=since),
-        # entry hours in Israel time, matching every other timestamp on the page
-        "breakdown": _journal.breakdown(since=since, tz=DISPLAY_TZ),
+        "breakdown": breakdown,
     }
 
     if equity:
@@ -505,6 +613,112 @@ def protect():
     mgr.save()
     log.info("Protective stops placed: %d (skipped: %s)", placed, ", ".join(skipped) or "none")
     return jsonify({"ok": True, "placed": placed, "skipped": skipped})
+
+
+_research_cache: dict = {"ts": None, "payload": None}
+
+
+def _build_research() -> dict:
+    """Autopsies + parameter sweep + conclusions, in one payload."""
+    import postmortem as pm
+
+    journal = TradeJournal(config.trade_log_file, account=_account_broker.account_number)
+    trades = journal.recent(limit=5000)
+    # research shows only complete autopsies — a trade closed earlier today
+    # waits for the nightly run instead of appearing as a half-baked "partial"
+    reviews = [r for r in pm.load_reviews(config.trade_log_file) if r.get("data_ok")]
+
+    sweep_rows = []
+    if reviews:
+        try:
+            # sweep only what has been reviewed: an unreviewed trade has no bars
+            # on disk yet, and would silently land in the "skipped" column
+            done = {r["trade_id"] for r in reviews}
+            days = sorted(r["trade_day"] for r in reviews if r.get("trade_day"))
+            source = pm._BarSource(days[0], days[-1])
+            sweep_rows = pm.sweep([t for t in trades if t["id"] in done], source)
+        except Exception as e:
+            logging.getLogger("server").warning("Sweep failed: %s", e)
+
+    return {
+        "ok": True,
+        "reviews": reviews,
+        "sweep": sweep_rows,
+        "conclusions": pm.conclusions(reviews, sweep_rows),
+        "pending": len([
+            t for t in trades
+            if t["id"] not in pm.reviewed_ids(config.trade_log_file)
+            and (d := pm._to_et(t.get("exit_time"))) is not None
+            and pm.session_complete(d.date())
+        ]),
+        "config": {k: getattr(config, k) for k in
+                   ("atr_stop_mult", "atr_trail_mult", "atr_trail_activate")},
+    }
+
+
+@app.get("/api/research")
+def research():
+    """Cached: the sweep re-reads parquet files, which is wasted work on a poll."""
+    age = (datetime.now() - _research_cache["ts"]).total_seconds() if _research_cache["ts"] else 1e9
+    if age > 300 or _research_cache["payload"] is None:
+        try:
+            _research_cache.update(ts=datetime.now(), payload=_build_research())
+        except Exception as e:
+            logging.getLogger("server").warning("Research build failed: %s", e)
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify(_research_cache["payload"])
+
+
+@app.post("/api/research/run")
+def research_run():
+    """Analyse every trade that has not been reviewed yet."""
+    import postmortem as pm
+
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    journal = TradeJournal(config.trade_log_file, account=_account_broker.account_number)
+    try:
+        result = pm.run(config.trade_log_file, journal.recent(limit=5000), force=force)
+    except Exception as e:
+        logging.getLogger("server").error("Research run failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    _research_cache.update(ts=None, payload=None)      # force a rebuild on next read
+    return jsonify({"ok": True, **result})
+
+
+@app.post("/api/close/<symbol>")
+def close_position(symbol: str):
+    """Sell one position now, at market, and journal it as a manual close.
+
+    Routed through the bot when it is running so the trade is recorded with its
+    real fill price and the trailing-stop state is cleaned up — selling behind
+    the bot's back makes _reconcile() log the stop price as the exit instead.
+    """
+    symbol = symbol.upper().strip()
+    log = logging.getLogger("server")
+    try:
+        positions = {p["symbol"]: p for p in _account_broker.get_open_positions()}
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+    pos = positions.get(symbol)
+    if not pos:
+        return jsonify({"ok": False, "error": f"אין פוזיציה פתוחה ב-{symbol}"}), 404
+
+    try:
+        if state["bot"]:
+            ok = state["bot"]._close_position(symbol, pos["qty"], pos["current_price"], "סגירה ידנית")
+            if not ok:
+                return jsonify({"ok": False, "error": "הברוקר דחה את המכירה"}), 502
+        else:
+            _account_broker.cancel_stops_for(symbol)
+            if not _account_broker.sell(symbol, pos["qty"]):
+                return jsonify({"ok": False, "error": "הברוקר דחה את המכירה"}), 502
+    except Exception as e:
+        log.error("Manual close failed for %s: %s", symbol, e)
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+    log.info("Manual close: %s x %.4f", symbol, pos["qty"])
+    return jsonify({"ok": True, "symbol": symbol, "qty": pos["qty"]})
 
 
 def _pick_timeframe(span: timedelta) -> tuple[TimeFrame, str]:
@@ -603,6 +817,63 @@ def history(symbol: str):
 
 AUTOSTART_FILE = ROOT / "autostart.json"
 
+# Set when the bot thread dies without anyone asking it to. The dashboard needs
+# to tell "you switched it off" apart from "it fell over" — the first time this
+# happened the user read "האוטומציה כבויה" and assumed they had forgotten to
+# press the button, while the real cause was a dropped connection at 01:56.
+crash_state: dict = {"crashed_at": None, "reason": "", "revives": 0}
+
+
+def _watchdog():
+    """Restart the bot if its thread dies while autostart is still on.
+
+    The loop in main.py now survives transient faults on its own; this is the
+    second line of defence for anything that kills the thread outright.
+    """
+    log = logging.getLogger("server")
+    fails = 0
+    while True:
+        time.sleep(20)
+        try:
+            if not _autostart_on() or bot_running():
+                fails = 0
+                continue
+            # Guard on "a bot has run in this process", NOT on state["thread"]:
+            # a failed revive nulls that field, and the old guard then treated
+            # the bot as "never started" and disarmed the watchdog for good.
+            # That is exactly what happened on 20/08/2026 — DNS was down when
+            # the revive fired, the single attempt failed, and the bot stayed
+            # dead for 27 hours while the network came back.
+            if not state.get("ever_started"):
+                continue
+            if not crash_state["crashed_at"]:
+                crash_state.update(
+                    crashed_at=now_local().strftime("%d/%m/%Y %H:%M:%S"),
+                    reason="תהליכון הבוט נעצר מעצמו",
+                )
+                log.error("שומר: תהליכון הבוט מת — מנסה להרים מחדש")
+            symbols = state["focus"] or DEFAULT_UNIVERSE
+            state["bot"] = state["thread"] = None
+            if _start_bot(symbols):
+                crash_state["revives"] += 1
+                fails = 0
+                log.error("שומר: הבוט הופעל מחדש אוטומטית (פעם %d)",
+                          crash_state["revives"])
+        except Exception as e:                   # a watchdog must never die
+            fails += 1
+            # An outage can last hours. Keep trying forever, but back off so the
+            # log does not fill with the same DNS error every 20 seconds.
+            if fails <= 3 or fails % 15 == 0:
+                log.warning("שומר: ניסיון החייאה %d נכשל, ממשיך לנסות — %s", fails, e)
+            time.sleep(min(300, 20 * fails))
+
+
+def _autostart_on() -> bool:
+    try:
+        return bool(json.loads(AUTOSTART_FILE.read_text()).get("on"))
+    except Exception:
+        return False
+
 
 def _set_autostart(on: bool):
     try:
@@ -619,6 +890,8 @@ def _start_bot(symbols: list[str]) -> bool:
     thread = threading.Thread(target=bot.run, daemon=True, name="bot-loop")
     state["bot"] = bot
     state["thread"] = thread
+    state["ever_started"] = True      # the watchdog's arming flag; survives a
+                                      # failed revive, unlike state["thread"]
     thread.start()
     logging.getLogger("server").info("Automation STARTED, focus: %s", ", ".join(symbols))
     return True
@@ -761,6 +1034,7 @@ def _lan_ip() -> str:
 
 if __name__ == "__main__":
     _maybe_autostart()
+    threading.Thread(target=_watchdog, daemon=True, name="bot-watchdog").start()
     port = config.dashboard_port
     print(f"\n  מהמחשב:  http://localhost:{port}")
 
