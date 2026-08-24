@@ -18,6 +18,7 @@ the bot (same policy as the SPY gate).
 
 import json
 import logging
+import threading
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
@@ -25,6 +26,31 @@ logger = logging.getLogger(__name__)
 
 CACHE_FILE = Path("data/earnings_cache.json")
 LOOKAHEAD_LIMIT = 12          # yfinance rows per symbol
+# yfinance exposes no timeout. On 24/08/2026 the ORCL lookup hung for 765
+# seconds and stalled everything behind it, so each symbol gets a hard cap.
+LOOKUP_TIMEOUT_S = 15
+
+
+def _with_timeout(fn, seconds: float):
+    """Run fn in a worker thread and give up if it outlives `seconds`.
+
+    The worker is a daemon: if the call is truly wedged it keeps running in the
+    background and dies with the process, but the caller is freed either way.
+    """
+    box: dict = {}
+    def _run():
+        try:
+            box["value"] = fn()
+        except Exception as exc:
+            box["error"] = exc
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"lookup exceeded {seconds}s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def _reaction_days(ts) -> set[str]:
@@ -52,7 +78,10 @@ def fetch_blocked_days(symbols: list[str]) -> dict[str, list[str]]:
 
     for sym in symbols:
         try:
-            ed = yf.Ticker(sym).get_earnings_dates(limit=LOOKAHEAD_LIMIT)
+            ed = _with_timeout(
+                lambda: yf.Ticker(sym).get_earnings_dates(limit=LOOKAHEAD_LIMIT),
+                LOOKUP_TIMEOUT_S,
+            )
             days: set[str] = set()
             if ed is not None and not ed.empty:
                 for ts in ed.index:

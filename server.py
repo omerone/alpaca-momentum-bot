@@ -710,9 +710,30 @@ def close_position(symbol: str):
             if not ok:
                 return jsonify({"ok": False, "error": "הברוקר דחה את המכירה"}), 502
         else:
+            # Bot off: sell directly — but the trade must still reach the journal
+            # and the persisted stop state, or the position vanishes from every
+            # statistic exactly like the $193.60 that went missing on 17/08.
             _account_broker.cancel_stops_for(symbol)
-            if not _account_broker.sell(symbol, pos["qty"]):
+            order = _account_broker.sell(symbol, pos["qty"])
+            if not order:
                 return jsonify({"ok": False, "error": "הברוקר דחה את המכירה"}), 502
+            exit_price = _account_broker.get_fill_price(order["id"]) or pos["current_price"]
+            mgr = TrailingStopManager(config, config.stop_state_file,
+                                      account=_account_broker.account_number)
+            mgr.load(quiet=True)
+            saved = mgr.get_position(symbol)
+            _journal.record(
+                symbol, pos["qty"],
+                saved.entry_price if saved else pos["entry_price"], exit_price,
+                "סגירה ידנית (הבוט כבוי)",
+                saved.entry_time if saved else None,
+                stop_price=saved.stop_loss if saved else None,
+                initial_stop=(saved.stop_history[0][1]
+                              if saved and saved.stop_history else None),
+            )
+            if saved:
+                mgr.close_position(symbol)
+                mgr.save()
     except Exception as e:
         log.error("Manual close failed for %s: %s", symbol, e)
         return jsonify({"ok": False, "error": str(e)}), 502

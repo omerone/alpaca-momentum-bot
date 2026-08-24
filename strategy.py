@@ -1,6 +1,8 @@
 """Trailing stop loss position management."""
 
 import json
+import threading
+import os
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -82,7 +84,9 @@ class TrailingStopManager:
                 "account": self.account,
                 "positions": [p.to_dict() for p in self.positions.values()],
             }
-            tmp = self.state_path.with_suffix(".tmp")
+            # unique temp name: a shared one lets two concurrent savers clobber
+            # each other's staging file between write and replace
+            tmp = self.state_path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps(payload, indent=2))
             tmp.replace(self.state_path)      # atomic: never leave a half-written file
         except Exception as e:

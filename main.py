@@ -6,6 +6,7 @@ Connects to Alpaca Paper Trading for demo execution.
 import logging
 import signal
 import socket
+import threading
 import sys
 import time
 from datetime import datetime
@@ -70,6 +71,12 @@ class MomentumBot:
         self.earnings_blocked: dict[str, list[str]] = {}
         self._earnings_date = None
         self.active = True          # external stop switch (web dashboard)
+        # Selling and stop-placing are reachable from the trading loop AND from
+        # the dashboard's own thread (/api/close, /api/protect). Without this,
+        # two threads could sell the same position at the same instant — which
+        # on a long-only bot means an accidental SHORT with no stop on it.
+        # Re-entrant: _close_position calls _release/_place_broker_stop.
+        self._lock = threading.RLock()
         self._last_stop_sent: dict[str, float | None] = {}
         self.stops.load()           # keep trailed stops across restarts
         self._sync_existing_positions()
@@ -251,6 +258,10 @@ class MomentumBot:
         """Make sure every open position has a live protective stop order."""
         if not self.cfg.broker_stop_enabled:
             return
+        with self._lock:
+            self._protect_all_locked()
+
+    def _protect_all_locked(self):
         live = self.broker.get_open_stops()
         for symbol in self.stops.active_symbols():
             pos = self.stops.get_position(symbol)
@@ -262,9 +273,18 @@ class MomentumBot:
         self.stops.save()
 
     def _place_broker_stop(self, symbol: str, force: bool = False):
-        """(Re)park a protective stop at Alpaca. Cancels the previous one first."""
+        """(Re)park a protective stop at Alpaca. Cancels the previous one first.
+
+        Held under the same lock as selling: cancel-then-submit is not atomic,
+        and two threads interleaving it would leave two live stop orders on the
+        same shares — the second one sells stock we no longer own.
+        """
         if not self.cfg.broker_stop_enabled:
             return
+        with self._lock:
+            self._place_broker_stop_locked(symbol, force)
+
+    def _place_broker_stop_locked(self, symbol: str, force: bool = False):
         pos = self.stops.get_position(symbol)
         if not pos:
             return
@@ -286,12 +306,34 @@ class MomentumBot:
         """Open sell stops reserve the shares — cancel before selling."""
         if not self.cfg.broker_stop_enabled:
             return
+        # already re-entrant via _close_position; explicit for direct callers
         if self.broker.cancel_stops_for(symbol):
             time.sleep(0.4)      # give Alpaca a moment to free the shares
         self._last_stop_sent.pop(symbol, None)
         pos = self.stops.get_position(symbol)
         if pos:
             pos.broker_stop_id = None
+
+    def _daily_prep_loop(self):
+        """Refresh ATRs and earnings dates OFF the trading path.
+
+        Both are once-a-day network jobs, but they used to sit at the top of
+        the 3-second trading loop, ahead of the scan. On 24/08/2026 the network
+        flapped through the entry window and a yfinance call for ORCL hung for
+        765 seconds with no timeout; the loop barely advanced, the ATRs landed
+        at 18:08 and the earnings cache at 18:27 — both after the 18:00 window
+        had closed. The bot never scanned once that day.
+
+        A slow setup task must never cost a trading window. This thread owns
+        the retries; the trading loop only ever reads the results.
+        """
+        while running and self.active:
+            try:
+                self._refresh_atrs()        # no-ops once it has today's data
+                self._refresh_earnings()
+            except Exception as e:
+                logger.warning("הכנה יומית נכשלה — ינוסה שוב בעוד 30 שניות: %s", e)
+            time.sleep(30)
 
     # ---- daily research -------------------------------------------------
 
@@ -382,6 +424,30 @@ class MomentumBot:
 
     def _close_position(self, symbol: str, qty: float, price: float, reason: str):
         """Sell and remove a position from stop manager."""
+        with self._lock:
+            return self._close_position_locked(symbol, qty, price, reason)
+
+    def _close_position_locked(self, symbol: str, qty: float, price: float, reason: str):
+        # The caller's quantity may be stale — it was read before the lock, and
+        # a broker stop may have filled in between. Selling more than we hold
+        # opens a short position that nothing in this bot knows how to manage.
+        held, broker_entry = qty, None
+        try:
+            bp = next((p for p in self.broker.get_open_positions()
+                       if p["symbol"] == symbol), None)
+            held = bp["qty"] if bp else 0.0
+            # grab the entry price NOW — after the sale the position is gone and
+            # an untracked trade would otherwise be journalled with no cost basis
+            broker_entry = bp["entry_price"] if bp else None
+        except Exception as e:
+            logger.warning("לא ניתן לאמת כמות ל-%s לפני מכירה: %s", symbol, e)
+        if held <= 0:
+            logger.info("%s כבר לא מוחזקת אצל הברוקר — מדלג על המכירה", symbol)
+            self.stops.close_position(symbol)
+            self._last_stop_sent.pop(symbol, None)
+            return False
+        qty = min(qty, held)
+
         self._release_broker_stop(symbol)
 
         result = self.broker.sell(symbol, qty)
@@ -408,7 +474,15 @@ class MomentumBot:
                 symbol, reason, closed.entry_price, price, pnl_pct,
             )
         else:
-            logger.info("Closed %s (%s) @ $%.2f", symbol, reason, price)
+            # Untracked position (opened outside the bot, or already dropped by
+            # a concurrent path). It still left the account, so it still belongs
+            # in the journal — a missing row silently corrupts every statistic
+            # and every conclusion the research engine draws from them.
+            entry_time = self.broker.get_position_entry_time(symbol, qty)
+            self.journal.record(symbol, qty, broker_entry or price, price,
+                                f"{reason} (לא היה במעקב)", entry_time)
+            logger.warning("Closed %s (%s) @ $%.2f — לא היה במעקב, נרשם ביומן",
+                           symbol, reason, price)
         return True
 
     def recover_cash_if_needed(self):
@@ -676,6 +750,9 @@ class MomentumBot:
         except Exception as e:
             logger.error("שגיאה באתחול הבוט (ממשיך בכל זאת): %s", e)
 
+        threading.Thread(target=self._daily_prep_loop, daemon=True,
+                         name="daily-prep").start()
+
         last_scan = 0
         last_report = 0
         errors = 0                  # consecutive non-network failures
@@ -686,8 +763,8 @@ class MomentumBot:
             now = time.time()
 
             if self._market_hours():
-                self._refresh_atrs()
-                self._refresh_earnings()
+                # NOTE: _refresh_atrs / _refresh_earnings deliberately do NOT
+                # run here — see _daily_prep_loop.
                 self.close_stale_positions()
                 self.recover_cash_if_needed()
                 self.monitor_stops()
