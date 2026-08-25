@@ -20,6 +20,14 @@ from timeutil import ET, et_range_to_local, install_log_timezone, now_local
 
 install_log_timezone()          # log lines carry Israel time, not machine time
 
+# A half-open TCP connection — the normal result of a Wi-Fi flap or a laptop
+# waking up — leaves recv() blocking with no timeout, because the alpaca SDK
+# passes none to requests. On 25/08/2026 that froze the trading loop for 12
+# minutes with the thread still ALIVE, so the watchdog saw nothing wrong.
+# A default timeout turns an infinite hang into an ordinary exception, which
+# the loop's network-retry path already knows how to handle.
+socket.setdefaulttimeout(45)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -58,6 +66,12 @@ def _is_network_error(exc: BaseException) -> bool:
 
 
 class MomentumBot:
+    # CLASS-level, deliberately: selling and stop-placing are reachable from the
+    # trading loop and from the dashboard thread, and a revived bot is a new
+    # object. A per-instance lock would let a restarted bot sell alongside a
+    # stuck one — on a long-only bot that means an accidental short.
+    _position_lock = threading.RLock()
+
     def __init__(self):
         self.cfg = config
         self.broker = AlpacaBroker(self.cfg)
@@ -71,12 +85,8 @@ class MomentumBot:
         self.earnings_blocked: dict[str, list[str]] = {}
         self._earnings_date = None
         self.active = True          # external stop switch (web dashboard)
-        # Selling and stop-placing are reachable from the trading loop AND from
-        # the dashboard's own thread (/api/close, /api/protect). Without this,
-        # two threads could sell the same position at the same instant — which
-        # on a long-only bot means an accidental SHORT with no stop on it.
-        # Re-entrant: _close_position calls _release/_place_broker_stop.
-        self._lock = threading.RLock()
+        self._lock = MomentumBot._position_lock
+        self._heartbeat = time.time()   # watchdog liveness, see _daily_prep_loop
         self._last_stop_sent: dict[str, float | None] = {}
         self.stops.load()           # keep trailed stops across restarts
         self._sync_existing_positions()
@@ -761,6 +771,7 @@ class MomentumBot:
         while running and self.active:
           try:
             now = time.time()
+            self._heartbeat = now       # proof of life for the watchdog
 
             if self._market_hours():
                 # NOTE: _refresh_atrs / _refresh_earnings deliberately do NOT

@@ -844,6 +844,11 @@ AUTOSTART_FILE = ROOT / "autostart.json"
 # press the button, while the real cause was a dropped connection at 01:56.
 crash_state: dict = {"crashed_at": None, "reason": "", "revives": 0}
 
+# No heartbeat for this long means the loop is wedged, not merely busy. The loop
+# stamps one every iteration (~3s); the scan and the reports run well inside a
+# minute, so anything past this is a hang.
+STALL_SECONDS = 180
+
 
 def _watchdog():
     """Restart the bot if its thread dies while autostart is still on.
@@ -856,9 +861,30 @@ def _watchdog():
     while True:
         time.sleep(20)
         try:
-            if not _autostart_on() or bot_running():
+            if not _autostart_on():
                 fails = 0
                 continue
+            # A thread blocked on a dead socket is ALIVE, so is_alive() alone
+            # declares everything fine while the bot does nothing. On 25/08/2026
+            # the loop sat frozen for 12 minutes with five live positions and
+            # the watchdog never noticed. The loop stamps a heartbeat every
+            # iteration (~3s); if it goes quiet, treat it as dead.
+            if bot_running():
+                bot = state["bot"]
+                beat = getattr(bot, "_heartbeat", None) if bot else None
+                if beat is None or time.time() - beat < STALL_SECONDS:
+                    fails = 0
+                    continue
+                stalled_for = int(time.time() - beat)
+                crash_state.update(
+                    crashed_at=now_local().strftime("%d/%m/%Y %H:%M:%S"),
+                    reason=f"הלולאה נתקעה — ללא סימן חיים {stalled_for} שניות",
+                )
+                log.error("שומר: הלולאה תקועה %d שניות — מחליף את הבוט", stalled_for)
+                try:
+                    bot.stop()      # the old thread exits once its socket unblocks
+                except Exception:
+                    pass
             # Guard on "a bot has run in this process", NOT on state["thread"]:
             # a failed revive nulls that field, and the old guard then treated
             # the bot as "never started" and disarmed the watchdog for good.
