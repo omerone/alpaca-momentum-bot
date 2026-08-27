@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.omermaoz.tradingbot</string>
+  <key>WorkingDirectory</key> <string>/Users/omermaoz/trading bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/omermaoz/trading bot/.venv/bin/python</string>
+    <string>server.py</string>
+  </array>
+  <!-- start at login, and bring it back whenever the process dies for any
+       reason: reboot, crash, kill. The in-process watchdog cannot do this. -->
+  <key>RunAtLoad</key>        <true/>
+  <key>KeepAlive</key>        <true/>
+  <key>ThrottleInterval</key> <integer>30</integer>
+  <key>StandardOutPath</key>  <string>/Users/omermaoz/trading bot/server.log</string>
+  <key>StandardErrorPath</key><string>/Users/omermaoz/trading bot/server.log</string>
+</dict>
+</plist>

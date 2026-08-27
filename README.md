@@ -42,6 +42,27 @@ cp .env.example .env      # ואז ערוך והכנס מפתחות מ-Alpaca
 
 ---
 
+## שיהיה חי גם אחרי אתחול
+
+השומר שבתוך הבוט מטפל בתהליכון שמת או נתקע, אבל הוא לא יכול להחיות את התהליך
+שלו עצמו. ב-26/08/2026 המק כובה והבוט היה מושבת 30 שעות — שני ימי מסחר.
+
+```bash
+cp com.omermaoz.tradingbot.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.omermaoz.tradingbot.plist
+```
+
+`RunAtLoad` מרים אותו בכניסה למשתמש, `KeepAlive` מחזיר אותו תוך שניות מכל
+מוות — אתחול, קריסה או `kill -9`. לבדיקה: `kill -9` על התהליך, והוא חוזר לבד.
+
+```bash
+launchctl print gui/$(id -u)/com.omermaoz.tradingbot | grep -E "state|pid|runs"
+launchctl bootout gui/$(id -u)/com.omermaoz.tradingbot     # לכיבוי
+```
+
+**מה שזה עדיין לא פותר:** מק כבוי או ישן לא מריץ כלום. הרצה רציפה באמת דורשת
+מכונה שלא נכבית.
+
 ## מה כל קובץ עושה
 
 | קובץ | תפקיד |
