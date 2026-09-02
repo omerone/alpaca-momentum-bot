@@ -119,6 +119,11 @@
   th { color: var(--dim); text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
   td { padding: 9px 8px; border-bottom: 1px solid #21262d; }
   .pos { color: #4ade80; } .neg { color: #f87171; }
+  @keyframes tickup   { from { background: #2ea04355; } to { background: transparent; } }
+  @keyframes tickdown { from { background: #da363355; } to { background: transparent; } }
+  .tickup   { animation: tickup .9s ease-out; border-radius: 6px; }
+  .tickdown { animation: tickdown .9s ease-out; border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { .tickup, .tickdown { animation: none; } }
   /* numbers must stay LTR inside the RTL page, otherwise the minus sign jumps around */
   .num { direction: ltr; unicode-bidi: isolate; text-align: right; font-variant-numeric: tabular-nums; }
   /* mixed Hebrew+numbers ("שעה ו-29 דקות") inside an LTR .num box: without an RTL
@@ -319,16 +324,19 @@
   <div class="card full">
     <h2>חשבון ופוזיציות (Paper — כסף דמה)</h2>
     <div class="hint">מה מוחזק ברגע זה. <b>רווח/הפסד פתוח</b> = כמה שווה מה שביד לעומת מחיר הקנייה —
-      עוד לא נסגר, המספר זז כל שנייה. <b>Stop</b> = המחיר שבו נמכור אוטומטית כדי לעצור הפסד.</div>
+      עוד לא נסגר, המספר זז כל שנייה. <b>Stop</b> = המחיר שבו נמכור אוטומטית כדי לעצור הפסד.<br>
+      <b>רצפה נעולה</b> = מה שהיה יוצא לך אילו כל הסטופים היו נפגעים ברגע זה — הגרוע ביותר שהמערכת מרשה.
+      כשהיא ירוקה, הרווח כבר נעול ואי אפשר להפסיד את העסקה.</div>
     <div class="stats">
       <div class="stat"><div class="v num" id="equity">—</div><div class="k">שווי תיק</div></div>
       <div class="stat"><div class="v num" id="cash">—</div><div class="k">מזומן</div></div>
       <div class="stat"><div class="v" id="posCount">—</div><div class="k">פוזיציות פתוחות</div></div>
       <div class="stat big"><div class="v num" id="totalPl">—</div><div class="k">רווח/הפסד פתוח</div></div>
+      <div class="stat big"><div class="v num" id="lockedPl">—</div><div class="k">רצפה נעולה — אם הסטופ ייפגע</div></div>
     </div>
     <div id="guardBar" class="guard" style="display:none"></div>
     <div class="tblwrap"><table>
-      <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>שווי הפוזיציה</th><th>רווח/הפסד</th><th>Stop</th><th></th></tr></thead>
+      <thead><tr><th>מניה</th><th>נפתח</th><th>כמות</th><th>כניסה</th><th>עכשיו</th><th>שווי הפוזיציה</th><th>רווח/הפסד</th><th>רצפה נעולה<span class="sub">אם הסטופ ייפגע</span></th><th>Stop</th><th></th></tr></thead>
       <tbody id="posBody"><tr><td colspan="9" style="color:var(--dim)">טוען...</td></tr></tbody>
     </table></div>
     <div style="color:var(--dim);font-size:12px;margin-top:10px">לחץ על שורה כדי לראות גרף מלא מרגע הכניסה ועד עכשיו</div>
@@ -340,7 +348,7 @@
       <thead><tr><th>מניה</th><th>נקנה</th><th>מחיר קנייה</th><th>נמכר</th><th>מחיר מכירה</th><th>משך</th><th>רווח/הפסד</th><th>סיבת מכירה</th></tr></thead>
       <tbody id="historyBody"><tr><td colspan="8" style="color:var(--dim)">אין עסקאות סגורות היום</td></tr></tbody>
     </table></div>
-    <div class="note">המחירים לפי רגע ההחלטה של הבוט — הביצוע המדויק אצל הברוקר יכול להיות מעט שונה.
+    <div class="note">לחץ על שורה כדי לראות את הגרף המלא של העסקה — מהכניסה ועד אחרי היציאה.
     היסטוריה מלאה, פילוחים וגרפים — בטאב "ביצועים".</div>
   </div>
 
@@ -747,9 +755,19 @@ async function refresh() {
     }
     document.getElementById("posCount").textContent = s.positions.length;
 
+    // What the account keeps if every stop fires right now. This is the number
+    // that makes the position readable: below it the strategy cannot take you,
+    // so the only open question is how much ABOVE it today ends up.
+    const locked = s.positions.reduce((a, p) => a + lockedFloor(p), 0);
+    const lockEl = document.getElementById("lockedPl");
+    lockEl.className = "v num " + (s.positions.length ? (locked >= 0 ? "pos" : "neg") : "");
+    lockEl.textContent = s.positions.length ? fmtSigned(locked) : "—";
+    flashOnChange(lockEl, locked);
+
     const totalPl = s.positions.reduce((a, p) => a + p.unrealized_pl, 0);
     const totalCost = s.positions.reduce((a, p) => a + p.entry_price * p.qty, 0);
     const totalEl = document.getElementById("totalPl");
+    flashOnChange(totalEl, totalPl);
     totalEl.className = "v num " + (s.positions.length ? (totalPl >= 0 ? "pos" : "neg") : "");
     totalEl.textContent = s.positions.length
       ? `${fmtSigned(totalPl)}  (${pct(totalCost ? totalPl / totalCost * 100 : 0)})`
@@ -768,9 +786,10 @@ async function refresh() {
         <td class="num">${fmt(p.current_price)}</td>
         <td class="num"><b>${fmt(p.qty * p.current_price)}</b></td>
         <td class="${cls}"><span class="pl"><span>${arrow}</span><span class="amt">${fmtSigned(p.unrealized_pl)}</span><span class="pc">${pct(p.unrealized_plpc)}</span></span></td>
+        <td class="num">${lockedCell(p)}</td>
         <td class="num">${stopCell(p)}</td>
         <td class="go">גרף ›</td></tr>`;
-    }).join("") : `<tr><td colspan="9" style="color:var(--dim)">אין פוזיציות פתוחות</td></tr>`;
+    }).join("") : `<tr><td colspan="10" style="color:var(--dim)">אין פוזיציות פתוחות</td></tr>`;
 
     renderGuardBar(s);
     if (view === "sim") renderSimChips();
@@ -792,6 +811,37 @@ function whenCell(when, heldSeconds) {
   if (!when || !when.ms) return `<span style="color:var(--dim)">—</span>`;
   const sub = heldSeconds ? `<div class="sub">${humanDuration(heldSeconds * 1000)}</div>` : "";
   return `<div class="when" title="${when.full}">${when.label}${sub}</div>`;
+}
+
+// A stop above the entry has already locked profit in; below it, this is the
+// most the trade can still cost. Either way it is the floor under the number
+// the user is watching tick.
+function lockedFloor(p) {
+  const stop = p.stop != null ? p.stop : p.broker_stop;
+  if (stop == null || !p.qty) return 0;
+  return (stop - p.entry_price) * p.qty;
+}
+
+function lockedCell(p) {
+  const stop = p.stop != null ? p.stop : p.broker_stop;
+  if (stop == null) return `<span style="color:var(--dim)">—</span>`;
+  const v = lockedFloor(p);
+  const pctv = p.entry_price ? (stop - p.entry_price) / p.entry_price * 100 : 0;
+  const cls = v >= 0 ? "pos" : "neg";
+  const tag = v >= 0 ? "רווח נעול" : "הפסד מרבי";
+  return `<span class="${cls}"><b>${fmtSigned(v)}</b></span>` +
+         `<span class="sub">${pct(pctv)} · ${tag}</span>`;
+}
+
+// a brief tint when a number moves, so a live figure looks live
+const _lastVals = new Map();
+function flashOnChange(el, value) {
+  const prev = _lastVals.get(el.id);
+  _lastVals.set(el.id, value);
+  if (prev === undefined || Math.abs(value - prev) < 0.005) return;
+  el.classList.remove("tickup", "tickdown");
+  void el.offsetWidth;                       // restart the animation
+  el.classList.add(value > prev ? "tickup" : "tickdown");
 }
 
 function stopCell(p) {
@@ -1078,7 +1128,7 @@ async function loadHistory() {
       const buyT = t.entry_time ? t.entry_time.slice(11, 16) : "—";
       const mins = t.held_seconds != null
         ? `<span class="dur">${hebMins(Math.round(t.held_seconds / 60))}</span>` : "—";
-      return `<tr class="${win ? "up" : "down"}">
+      return `<tr class="clickable ${win ? "up" : "down"}" onclick="openTradeChart(${t.id}, '${t.symbol}')">
         <td><b>${t.symbol}</b></td>
         <td class="num">${buyT}</td><td class="num">${fmt(t.entry_price)}</td>
         <td class="num">${t.closed ? t.closed.label.replace("היום ", "") : "—"}</td>
@@ -1524,6 +1574,24 @@ function openChart(sym) {
   chartTimer = setInterval(() => loadChart(chartSym), 20000);
 }
 
+function openTradeChart(id, sym) {
+  chartSym = null;                       // closed trade — static, no live refresh
+  chartData = null;
+  document.getElementById("cSym").textContent = sym + " · עסקה סגורה";
+  document.getElementById("cSub").textContent = "טוען נתונים...";
+  document.getElementById("cKpis").innerHTML = "";
+  document.getElementById("chartWrap").innerHTML = '<div id="tip"></div><div class="empty">טוען...</div>';
+  document.getElementById("modal").classList.add("show");
+  clearInterval(chartTimer); chartTimer = null;
+  (async () => {
+    try {
+      const d = await (await fetch("/api/trade_chart/" + id)).json();
+      if (!d.ok) { chartError(d.error || "שגיאה בטעינת הנתונים"); return; }
+      chartData = d; renderChart();
+    } catch (e) { chartError("השרת לא זמין כרגע"); }
+  })();
+}
+
 function closeChart() {
   document.getElementById("modal").classList.remove("show");
   clearInterval(chartTimer);
@@ -1574,22 +1642,24 @@ function renderChart() {
   let peak = entry, dd = 0;
   held.forEach(b => { peak = Math.max(peak, b.h); dd = Math.min(dd, (b.l - peak) / peak * 100); });
   const plCls = d.unrealized_pl >= 0 ? "pos" : "neg";
-  const heldMs = d.entry_ms ? Date.now() - d.entry_ms : null;
+  const heldMs = d.closed
+    ? (d.held_seconds != null ? d.held_seconds * 1000 : null)
+    : (d.entry_ms ? Date.now() - d.entry_ms : null);
 
   const when = d.opened && d.opened.ms
     ? `<b>${d.opened.label}</b> (${d.opened.full})` : `<b>${d.entry_label}</b>`;
   document.getElementById("cSub").innerHTML =
     `נכנסנו ${when}${d.entry_exact ? "" : " — משוער"}` +
-    `${heldMs != null ? ` · מחזיקים ${humanDuration(heldMs)}` : ""} · ${d.qty.toFixed(2)} מניות · ` +
+    `${heldMs != null ? ` · ${d.closed ? "הוחזק" : "מחזיקים"} ${humanDuration(heldMs)}` : ""} · ${d.qty.toFixed(2)} מניות · ` +
     `נרות של ${d.interval} · ${bars.length} נקודות · מקור: IEX`;
 
   document.getElementById("cKpis").innerHTML =
     kpi("מחיר כניסה", fmt(entry)) +
-    kpi("מחיר עכשיו", fmt(d.current_price)) +
-    kpi("רווח/הפסד", `${d.unrealized_pl >= 0 ? "▲" : "▼"} ${fmtSigned(d.unrealized_pl)} (${pct(d.unrealized_plpc)})`, plCls) +
-    kpi("Stop נוכחי", (d.stop != null || d.broker_stop != null)
+    kpi(d.closed ? "מחיר יציאה" : "מחיר עכשיו", fmt(d.current_price)) +
+    kpi(d.closed ? "רווח/הפסד (ממומש)" : "רווח/הפסד", `${d.unrealized_pl >= 0 ? "▲" : "▼"} ${fmtSigned(d.unrealized_pl)} (${pct(d.unrealized_plpc)})`, plCls) +
+    kpi(d.closed ? "Stop בסגירה" : "Stop נוכחי", (d.stop != null || d.broker_stop != null)
         ? `${fmt(d.stop != null ? d.stop : d.broker_stop)} (${pct(((d.stop != null ? d.stop : d.broker_stop) - entry) / entry * 100)})` +
-          (d.broker_stop != null ? ` 🛡 ${d.broker_stop_qty}/${d.qty.toFixed(2)}` : " · חשוף")
+          (d.broker_stop != null ? ` 🛡 ${d.broker_stop_qty}/${d.qty.toFixed(2)}` : (d.closed ? "" : " · חשוף"))
         : "לא הוגדר") +
     kpi("שיא מאז הכניסה", `${fmt(hi)} (${pct((hi - entry) / entry * 100)})`) +
     kpi("שפל מאז הכניסה", `${fmt(lo)} (${pct((lo - entry) / entry * 100)})`) +
@@ -1696,6 +1766,18 @@ function renderChart() {
     svg.push(`<circle cx="${ex.toFixed(1)}" cy="${Y(bars[sinceIdx].c).toFixed(1)}" r="4.5" fill="#d29922"/>`);
   }
   svg.push(`<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(bars[n - 1].c).toFixed(1)}" r="4.5" fill="${col}"/>`);
+
+  // the exit moment (closed trades)
+  if (d.exit_ms) {
+    let xi = bars.findIndex(b => b.ms >= d.exit_ms);
+    if (xi < 0) xi = n - 1;
+    const xx = X(xi);
+    const xcol = d.unrealized_pl >= 0 ? "#2ea043" : "#da3633";
+    svg.push(`<rect x="${xx.toFixed(1)}" y="${y0}" width="${Math.max(0, padL + plotW - xx).toFixed(1)}" height="${plotH}" fill="#0d111799"/>`);
+    svg.push(`<line x1="${xx.toFixed(1)}" y1="${y0}" x2="${xx.toFixed(1)}" y2="${y1}" stroke="${xcol}" stroke-dasharray="4 3"/>`);
+    if (d.exit_price != null)
+      svg.push(`<circle cx="${xx.toFixed(1)}" cy="${Y(d.exit_price).toFixed(1)}" r="5" fill="${xcol}" stroke="#0d1117" stroke-width="1.5"/>`);
+  }
 
   // time axis
   const ticks = Math.min(6, n);
